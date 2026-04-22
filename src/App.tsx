@@ -13,7 +13,7 @@ import {
 } from "./api";
 import type { PortInfo, StationConfig } from "./types";
 
-const VERSION = "0.1.2";
+const VERSION = "0.1.3";
 
 type HardwareSession = {
   id: string;
