@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createClient } from "@supabase/supabase-js";
 import { Bot, CheckCircle2, KeyRound, PlugZap, Printer, RefreshCw, Save, Scale, ShieldCheck, WifiOff, Wrench } from "lucide-react";
 import {
   adminLogin,
@@ -7,6 +8,7 @@ import {
   aiSaveStationConfig,
   enrollAgent,
   ensureWindowsAutostart,
+  fetchRealtimeToken,
   heartbeatOnce,
   listPrinters,
   listSerialPorts,
@@ -18,12 +20,13 @@ import {
 } from "./api";
 import type { AiProposedAction, PortInfo, PrinterConfig, ScaleConfig, StationConfig } from "./types";
 
-const VERSION = "0.2.2";
+const VERSION = "0.2.3";
 const DEFAULT_SERVER_URL = "https://kyberfrigo.kybernan.com.br";
 const ACTIVE_SERVICE_POLL_MS = 2000;
-const IDLE_SERVICE_POLL_MS = 30000;
+const IDLE_SERVICE_POLL_MS = 300000;
 const MIN_SERVICE_POLL_MS = 1000;
-const MAX_SERVICE_POLL_MS = 120000;
+const MAX_SERVICE_POLL_MS = 600000;
+const REALTIME_TOKEN_REFRESH_MARGIN_MS = 60000;
 
 type HardwareSession = {
   id: string;
@@ -474,6 +477,95 @@ export function App() {
       if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [isEnrolled, serviceTick]);
+
+  useEffect(() => {
+    if (!isEnrolled || !config.token || !config.agentId) return;
+
+    let cancelled = false;
+    let refreshTimer: number | undefined;
+    let wakeTimer: number | undefined;
+    let client: ReturnType<typeof createClient> | undefined;
+
+    const wakeService = () => {
+      if (wakeTimer !== undefined) window.clearTimeout(wakeTimer);
+      wakeTimer = window.setTimeout(() => {
+        if (cancelled) return;
+        serviceTick().catch((error) => {
+          setStatus(error instanceof Error ? error.message : "Falha ao processar evento Realtime.");
+        });
+      }, 150);
+    };
+
+    const connect = async () => {
+      try {
+        if (client) {
+          await client.removeAllChannels();
+          client.realtime.disconnect();
+          client = undefined;
+        }
+
+        const realtime = await fetchRealtimeToken(config);
+        if (cancelled) return;
+
+        client = createClient(realtime.supabaseUrl, realtime.publishableKey, {
+          auth: {
+            autoRefreshToken: false,
+            persistSession: false,
+          },
+          realtime: {
+            params: {
+              eventsPerSecond: 5,
+            },
+          },
+        });
+        client.realtime.setAuth(realtime.token);
+
+        client
+          .channel(`hardware-agent-${realtime.agentId}`)
+          .on(
+            "postgres_changes",
+            { event: "*", schema: "public", table: "hardware_sessions", filter: `agent_id=eq.${realtime.agentId}` },
+            wakeService,
+          )
+          .on(
+            "postgres_changes",
+            { event: "*", schema: "public", table: "hardware_print_jobs", filter: `agent_id=eq.${realtime.agentId}` },
+            wakeService,
+          )
+          .subscribe((status) => {
+            if (cancelled) return;
+            if (status === "SUBSCRIBED") {
+              setStatus("Realtime conectado. Polling ficou como fallback.");
+            }
+            if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+              setStatus("Realtime indisponivel. Usando polling de fallback.");
+            }
+          });
+
+        const refreshDelay = Math.max(
+          30000,
+          new Date(realtime.expiresAt).getTime() - Date.now() - REALTIME_TOKEN_REFRESH_MARGIN_MS,
+        );
+        refreshTimer = window.setTimeout(connect, refreshDelay);
+      } catch (error) {
+        if (cancelled) return;
+        setStatus(error instanceof Error ? error.message : "Falha ao conectar Realtime.");
+        refreshTimer = window.setTimeout(connect, IDLE_SERVICE_POLL_MS);
+      }
+    };
+
+    void connect();
+
+    return () => {
+      cancelled = true;
+      if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
+      if (wakeTimer !== undefined) window.clearTimeout(wakeTimer);
+      if (client) {
+        void client.removeAllChannels();
+        client.realtime.disconnect();
+      }
+    };
+  }, [config.agentId, config.serverUrl, config.token, isEnrolled, serviceTick]);
 
   async function heartbeat() {
     setIsBusy(true);

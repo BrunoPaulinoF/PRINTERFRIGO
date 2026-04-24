@@ -44,6 +44,17 @@ export type EnrollmentResult = {
   token: string;
 };
 
+export type RealtimeTokenResult = {
+  ok: boolean;
+  supabaseUrl: string;
+  publishableKey: string;
+  token: string;
+  expiresAt: string;
+  expiresInSeconds: number;
+  agentId: string;
+  tenantId: string;
+};
+
 export type PortInfo = {
   name: string;
   kind: string;

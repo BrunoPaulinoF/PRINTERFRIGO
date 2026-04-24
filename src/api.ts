@@ -7,6 +7,7 @@ import type {
   LocalToolResult,
   PortInfo,
   PrinterConfig,
+  RealtimeTokenResult,
   StationConfig,
 } from "./types";
 
@@ -44,6 +45,23 @@ export function testPrintZpl(printer: PrinterConfig, zpl: string): Promise<strin
 
 export function heartbeatOnce(config: StationConfig): Promise<unknown> {
   return invoke("heartbeat_once", { config });
+}
+
+export async function fetchRealtimeToken(config: StationConfig): Promise<RealtimeTokenResult> {
+  if (!config.token) throw new Error("Agente ainda nao matriculado.");
+  const response = await fetch(`${config.serverUrl.replace(/\/$/, "")}/api/hardware/agent/realtime-token`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.token}`,
+      "Content-Type": "application/json",
+    },
+    body: "{}",
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(typeof body.error === "string" ? body.error : "Falha ao autenticar Realtime.");
+  }
+  return body as RealtimeTokenResult;
 }
 
 export function adminLogin(password: string): Promise<AdminSession> {
