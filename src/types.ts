@@ -46,3 +46,41 @@ export type PortInfo = {
   name: string;
   kind: string;
 };
+
+export type AdminSession = {
+  token: string;
+  expiresAtMs: number;
+};
+
+export type AdminStatus = {
+  authenticated: boolean;
+  expiresAtMs?: number;
+};
+
+export type AiLocalSnapshot = {
+  savedConfig?: StationConfig | null;
+  draftConfig?: StationConfig | null;
+  serialPorts: unknown;
+  printers: unknown;
+  printJobs: unknown;
+  services: unknown;
+};
+
+export type AiProposedAction = {
+  id: string;
+  label: string;
+  tool: string;
+  args?: Record<string, unknown>;
+  requiresConfirmation?: boolean;
+};
+
+export type AiChatResponse = {
+  reply: string;
+  proposedActions: AiProposedAction[];
+};
+
+export type LocalToolResult = {
+  ok: boolean;
+  message: string;
+  data: unknown;
+};

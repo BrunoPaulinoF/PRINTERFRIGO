@@ -1,3 +1,4 @@
+mod admin_ai;
 mod config;
 mod hardware;
 mod printing;
@@ -9,6 +10,7 @@ use tauri::Manager;
 
 pub fn run() {
     tauri::Builder::default()
+        .manage(admin_ai::AdminState::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
@@ -33,9 +35,22 @@ pub fn run() {
                 })
                 .build(app)?;
 
+            if std::env::args().any(|arg| arg == "--minimized") {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            admin_ai::admin_login,
+            admin_ai::admin_logout,
+            admin_ai::admin_status,
+            admin_ai::ensure_windows_autostart,
+            admin_ai::ai_collect_snapshot,
+            admin_ai::ai_run_local_tool,
+            admin_ai::ai_save_station_config,
             config::load_config,
             config::save_config,
             hardware::enroll_agent,

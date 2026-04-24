@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CheckCircle2, PlugZap, Printer, RefreshCw, Save, Scale, ShieldCheck, WifiOff } from "lucide-react";
+import { Bot, CheckCircle2, KeyRound, PlugZap, Printer, RefreshCw, Save, Scale, ShieldCheck, WifiOff, Wrench } from "lucide-react";
 import {
+  adminLogin,
+  aiCollectSnapshot,
+  aiRunLocalTool,
+  aiSaveStationConfig,
   enrollAgent,
+  ensureWindowsAutostart,
   heartbeatOnce,
   listPrinters,
   listSerialPorts,
@@ -11,9 +16,9 @@ import {
   testPrintZpl,
   testScaleParse,
 } from "./api";
-import type { PortInfo, StationConfig } from "./types";
+import type { AiProposedAction, PortInfo, StationConfig } from "./types";
 
-const VERSION = "0.1.3";
+const VERSION = "0.1.4";
 
 type HardwareSession = {
   id: string;
@@ -84,6 +89,12 @@ export function App() {
   const [lastWeight, setLastWeight] = useState<number | null>(null);
   const [status, setStatus] = useState("Carregando configuracao local...");
   const [isBusy, setIsBusy] = useState(false);
+  const [adminPassword, setAdminPassword] = useState("");
+  const [adminToken, setAdminToken] = useState<string | null>(null);
+  const [aiInput, setAiInput] = useState("Configure esta estacao para usar a impressora e a balanca conectadas, validando antes de salvar.");
+  const [aiReply, setAiReply] = useState("");
+  const [aiActions, setAiActions] = useState<AiProposedAction[]>([]);
+  const [aiBusy, setAiBusy] = useState(false);
   const handledCommands = useRef(new Set<string>());
   const handledJobs = useRef(new Set<string>());
   const autoSessions = useRef(new Map<string, AutoSessionState>());
@@ -97,6 +108,7 @@ export function App() {
       })
       .catch((error) => setStatus(String(error)));
     void refreshDevices();
+    ensureWindowsAutostart().catch(() => undefined);
   }, []);
 
   const sampleZpl = useMemo(() => "^XA^CI28^FO40,40^A0N,36,36^FDPRINTERFRIGO^FS^FO40,90^BY2^BCN,80,Y,N,N^FDTESTE-0001^FS^XZ", []);
@@ -278,6 +290,89 @@ export function App() {
     }
   }
 
+  async function unlockAdmin() {
+    setIsBusy(true);
+    try {
+      const session = await adminLogin(adminPassword);
+      setAdminToken(session.token);
+      setAdminPassword("");
+      setStatus("Area Admin IA desbloqueada.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Falha ao desbloquear admin.");
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function askAi() {
+    if (!adminToken) {
+      setStatus("Desbloqueie a area Admin IA.");
+      return;
+    }
+    if (!config.token) {
+      setStatus("Matricule o PRINTERFRIGO antes de usar a IA.");
+      return;
+    }
+    setAiBusy(true);
+    try {
+      const snapshot = await aiCollectSnapshot(adminToken, config);
+      const response = await fetch(`${config.serverUrl.replace(/\/$/, "")}/api/hardware/agent/ai/chat`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${config.token}`,
+        },
+        body: JSON.stringify({ message: aiInput, snapshot }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error ?? "Falha ao consultar IA.");
+      setAiReply(payload.reply ?? "");
+      setAiActions(Array.isArray(payload.proposedActions) ? payload.proposedActions : []);
+      setStatus("IA gerou diagnostico e acoes propostas.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Falha na IA admin.");
+    } finally {
+      setAiBusy(false);
+    }
+  }
+
+  async function runAiAction(action: AiProposedAction) {
+    if (!adminToken) return;
+    if (action.requiresConfirmation !== false && !window.confirm(`Executar: ${action.label}?`)) return;
+    setAiBusy(true);
+    try {
+      const args = action.args ?? {};
+      if (action.tool === "save_station_config") {
+        const next = args.config as StationConfig | undefined;
+        if (!next) throw new Error("Acao sem config.");
+        await aiSaveStationConfig(adminToken, next);
+        setConfig({ ...defaultConfig, ...next, scale: { ...defaultConfig.scale, ...next.scale }, printer: { ...defaultConfig.printer, ...next.printer } });
+        setStatus("Configuracao local salva pela IA.");
+      } else if (action.tool === "apply_kyberfrigo_config") {
+        if (!config.token) throw new Error("Agente nao matriculado.");
+        const response = await fetch(`${config.serverUrl.replace(/\/$/, "")}/api/hardware/agent/configure`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${config.token}`,
+          },
+          body: JSON.stringify(args),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error ?? "Falha ao aplicar no KyberFrigo.");
+        setStatus("Configuracao sincronizada com KyberFrigo.");
+      } else {
+        const result = await aiRunLocalTool(adminToken, action.tool, args);
+        setStatus(result.message);
+      }
+      await refreshDevices();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Falha ao executar acao.");
+    } finally {
+      setAiBusy(false);
+    }
+  }
+
   return (
     <main className="app-shell">
       <section className="topbar">
@@ -358,6 +453,50 @@ export function App() {
             <button onClick={heartbeat} disabled={!isEnrolled || isBusy}>Heartbeat</button>
           </div>
           <pre>{status}</pre>
+        </div>
+
+        <div className="panel ai-panel">
+          <h2><Bot size={18} /> Admin IA</h2>
+          {!adminToken ? (
+            <>
+              <label>Senha admin</label>
+              <div className="row">
+                <input
+                  type="password"
+                  value={adminPassword}
+                  onChange={(e) => setAdminPassword(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && adminPassword) void unlockAdmin();
+                  }}
+                />
+                <button onClick={unlockAdmin} disabled={isBusy || !adminPassword}>
+                  <KeyRound size={15} /> Entrar
+                </button>
+              </div>
+              <p className="muted">A IA fica bloqueada para usuario comum. A chave OpenAI permanece no backend KyberFrigo.</p>
+            </>
+          ) : (
+            <>
+              <label>Pedido para IA</label>
+              <textarea value={aiInput} onChange={(e) => setAiInput(e.target.value)} />
+              <div className="row">
+                <button onClick={askAi} disabled={aiBusy || !aiInput.trim()}>
+                  <Bot size={15} /> Diagnosticar
+                </button>
+                <button onClick={() => setAdminToken(null)} disabled={aiBusy}>Bloquear</button>
+              </div>
+              {aiReply && <pre className="ai-reply">{aiReply}</pre>}
+              {aiActions.length > 0 && (
+                <div className="action-list">
+                  {aiActions.map((action) => (
+                    <button key={action.id} onClick={() => runAiAction(action)} disabled={aiBusy}>
+                      <Wrench size={15} /> {action.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
         </div>
       </section>
     </main>

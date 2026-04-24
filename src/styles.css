@@ -14,7 +14,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -38,7 +39,8 @@ button:disabled {
 }
 
 input,
-select {
+select,
+textarea {
   width: 100%;
   border: 1px solid #cfd8cc;
   border-radius: 7px;
@@ -46,6 +48,11 @@ select {
   color: #18201b;
   padding: 10px 11px;
   min-height: 42px;
+}
+
+textarea {
+  min-height: 104px;
+  resize: vertical;
 }
 
 label {
@@ -103,6 +110,10 @@ h2 {
   border-radius: 8px;
   background: #ffffff;
   padding: 18px;
+}
+
+.ai-panel {
+  grid-column: 1 / -1;
 }
 
 .row,
@@ -164,6 +175,19 @@ pre {
   color: #cdeed8;
   padding: 12px;
   white-space: pre-wrap;
+}
+
+.ai-reply {
+  background: #f3f7f4;
+  color: #1f3327;
+  border: 1px solid #dce3d8;
+}
+
+.action-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
 }
 
 @media (max-width: 820px) {
