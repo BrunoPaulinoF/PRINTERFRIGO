@@ -49,7 +49,7 @@ pub fn run() {
             {
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
-                    tauri::async_runtime::sleep(Duration::from_secs(10)).await;
+                    tokio::time::sleep(Duration::from_secs(10)).await;
                     match handle.updater() {
                         Ok(updater) => match updater.check().await {
                             Ok(Some(update)) => {
