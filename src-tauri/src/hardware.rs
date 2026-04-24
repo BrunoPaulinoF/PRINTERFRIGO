@@ -23,6 +23,26 @@ pub struct EnrollmentResult {
     token: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureRequest {
+    capture_id: String,
+    session_id: String,
+    point_id: String,
+    flow: String,
+    gross_weight: f64,
+    stable: bool,
+    payload: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrintJobStatusRequest {
+    job_id: String,
+    status: String,
+    error: Option<String>,
+}
+
 #[tauri::command]
 pub fn list_serial_ports() -> Result<Vec<PortInfo>, String> {
     let ports = serialport::available_ports().map_err(|err| err.to_string())?;
@@ -200,6 +220,76 @@ pub async fn heartbeat_once(config: StationConfig) -> Result<serde_json::Value, 
     let body = response.text().await.map_err(|err| err.to_string())?;
     if !status.is_success() {
         return Err(body);
+    }
+    serde_json::from_str(&body).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub async fn fetch_realtime_token(config: StationConfig) -> Result<serde_json::Value, String> {
+    let token = config.token.clone().ok_or_else(|| "Agente ainda nao matriculado.".to_string())?;
+    let client = reqwest::Client::new();
+    let url = format!("{}/api/hardware/agent/realtime-token", config.server_url.trim_end_matches('/'));
+    let response = client
+        .post(url)
+        .bearer_auth(token)
+        .json(&json!({}))
+        .send()
+        .await
+        .map_err(|err| format!("Nao foi possivel conectar ao KyberFrigo para Realtime: {err}"))?;
+    parse_json_response(response).await
+}
+
+#[tauri::command]
+pub async fn submit_capture(config: StationConfig, request: CaptureRequest) -> Result<serde_json::Value, String> {
+    let token = config.token.clone().ok_or_else(|| "Agente ainda nao matriculado.".to_string())?;
+    let client = reqwest::Client::new();
+    let url = format!("{}/api/hardware/agent/captures", config.server_url.trim_end_matches('/'));
+    let response = client
+        .post(url)
+        .bearer_auth(token)
+        .json(&json!({
+            "captureId": request.capture_id,
+            "sessionId": request.session_id,
+            "pointId": request.point_id,
+            "flow": request.flow,
+            "grossWeight": request.gross_weight,
+            "stable": request.stable,
+            "payload": request.payload,
+        }))
+        .send()
+        .await
+        .map_err(|err| format!("Nao foi possivel enviar captura ao KyberFrigo: {err}"))?;
+    parse_json_response(response).await
+}
+
+#[tauri::command]
+pub async fn report_print_job(config: StationConfig, request: PrintJobStatusRequest) -> Result<serde_json::Value, String> {
+    let token = config.token.clone().ok_or_else(|| "Agente ainda nao matriculado.".to_string())?;
+    let client = reqwest::Client::new();
+    let url = format!(
+        "{}/api/hardware/agent/print-jobs/{}",
+        config.server_url.trim_end_matches('/'),
+        request.job_id
+    );
+    let response = client
+        .patch(url)
+        .bearer_auth(token)
+        .json(&json!({ "status": request.status, "error": request.error }))
+        .send()
+        .await
+        .map_err(|err| format!("Nao foi possivel atualizar job de impressao: {err}"))?;
+    parse_json_response(response).await
+}
+
+async fn parse_json_response(response: reqwest::Response) -> Result<serde_json::Value, String> {
+    let status = response.status();
+    let body = response.text().await.map_err(|err| err.to_string())?;
+    if !status.is_success() {
+        let message = serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|value| value.get("error").and_then(|error| error.as_str()).map(str::to_string))
+            .unwrap_or(body);
+        return Err(message);
     }
     serde_json::from_str(&body).map_err(|err| err.to_string())
 }

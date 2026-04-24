@@ -105,13 +105,14 @@ mod tests {
 
     #[test]
     fn dry_run_writes_zpl_file() {
+        let dir = std::env::temp_dir().join(format!("printerfrigo-test-{}", uuid::Uuid::new_v4()));
         let printer = PrinterConfig {
             mode: "dry_run".to_string(),
             local_id: "test".to_string(),
             queue_name: None,
             host: None,
             port: None,
-            dry_run_dir: None,
+            dry_run_dir: Some(dir.display().to_string()),
         };
         let result = print_zpl(&printer, "^XA^XZ").unwrap();
         assert!(result.contains(".zpl"));

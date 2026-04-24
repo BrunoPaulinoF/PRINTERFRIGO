@@ -14,13 +14,15 @@ import {
   listSerialPorts,
   loadConfig,
   readScaleOnce,
+  reportPrintJob as reportPrintJobApi,
   saveConfig,
+  submitCapture as submitCaptureApi,
   testPrintZpl,
   testScaleParse,
 } from "./api";
 import type { AiProposedAction, PortInfo, PrinterConfig, ScaleConfig, StationConfig } from "./types";
 
-const VERSION = "0.2.6";
+const VERSION = "0.2.7";
 const DEFAULT_SERVER_URL = "https://kyberfrigo.kybernan.com.br";
 const ACTIVE_SERVICE_POLL_MS = 2000;
 const IDLE_SERVICE_POLL_MS = 300000;
@@ -347,33 +349,19 @@ export function App() {
 
   async function reportPrintJob(jobId: string, nextStatus: "PRINTED" | "FAILED", error?: string) {
     if (!config.token) return;
-    await fetch(`${config.serverUrl.replace(/\/$/, "")}/api/hardware/agent/print-jobs/${jobId}`, {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${config.token}`,
-      },
-      body: JSON.stringify({ status: nextStatus, error }),
-    });
+    await reportPrintJobApi(config, { jobId, status: nextStatus, error });
   }
 
   async function submitCapture(session: HardwareSession, weight: number, commandId: string) {
     if (!config.token) return;
-    await fetch(`${config.serverUrl.replace(/\/$/, "")}/api/hardware/agent/captures`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${config.token}`,
-      },
-      body: JSON.stringify({
-        captureId: `${session.id}-${commandId}`,
-        sessionId: session.id,
-        pointId: session.point_id,
-        flow: session.flow,
-        grossWeight: weight,
-        stable: true,
-        payload: { context: session.context },
-      }),
+    await submitCaptureApi(config, {
+      captureId: `${session.id}-${commandId}`,
+      sessionId: session.id,
+      pointId: session.point_id,
+      flow: session.flow,
+      grossWeight: weight,
+      stable: true,
+      payload: { context: session.context },
     });
   }
 
@@ -408,10 +396,10 @@ export function App() {
     for (const session of sessions) {
       const commandId = session.command?.id;
       if (session.command?.type !== "REQUEST_CAPTURE" || !commandId || handledCommands.current.has(commandId)) continue;
-      handledCommands.current.add(commandId);
       const weight = await readScaleOnce(scaleForSession(session));
       setLastWeight(weight);
       await submitCapture(session, weight, commandId);
+      handledCommands.current.add(commandId);
     }
 
     for (const session of sessions) {

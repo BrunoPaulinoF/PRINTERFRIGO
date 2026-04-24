@@ -48,20 +48,29 @@ export function heartbeatOnce(config: StationConfig): Promise<unknown> {
 }
 
 export async function fetchRealtimeToken(config: StationConfig): Promise<RealtimeTokenResult> {
-  if (!config.token) throw new Error("Agente ainda nao matriculado.");
-  const response = await fetch(`${config.serverUrl.replace(/\/$/, "")}/api/hardware/agent/realtime-token`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.token}`,
-      "Content-Type": "application/json",
-    },
-    body: "{}",
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(typeof body.error === "string" ? body.error : "Falha ao autenticar Realtime.");
-  }
-  return body as RealtimeTokenResult;
+  return invoke("fetch_realtime_token", { config });
+}
+
+export function submitCapture(
+  config: StationConfig,
+  request: {
+    captureId: string;
+    sessionId: string;
+    pointId: string;
+    flow: "RECEIVING" | "OP_OUTPUT";
+    grossWeight: number;
+    stable: boolean;
+    payload: Record<string, unknown>;
+  },
+): Promise<unknown> {
+  return invoke("submit_capture", { config, request });
+}
+
+export function reportPrintJob(
+  config: StationConfig,
+  request: { jobId: string; status: "PRINTED" | "FAILED"; error?: string },
+): Promise<unknown> {
+  return invoke("report_print_job", { config, request });
 }
 
 export function adminLogin(password: string): Promise<AdminSession> {
