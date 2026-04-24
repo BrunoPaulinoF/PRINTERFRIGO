@@ -43,6 +43,10 @@ pub struct StationConfig {
     pub app_version: String,
     pub scale: ScaleConfig,
     pub printer: PrinterConfig,
+    #[serde(default)]
+    pub scales: Vec<ScaleConfig>,
+    #[serde(default)]
+    pub printers: Vec<PrinterConfig>,
 }
 
 pub fn app_dir() -> Result<PathBuf, String> {

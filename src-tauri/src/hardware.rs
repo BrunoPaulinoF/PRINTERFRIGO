@@ -119,6 +119,22 @@ pub fn build_scale_device(config: &ScaleConfig) -> serde_json::Value {
     })
 }
 
+pub fn configured_scales(config: &StationConfig) -> Vec<ScaleConfig> {
+    let mut scales = if config.scales.is_empty() { vec![config.scale.clone()] } else { config.scales.clone() };
+    if !scales.iter().any(|scale| scale.port == config.scale.port) {
+        scales.insert(0, config.scale.clone());
+    }
+    scales
+}
+
+pub fn configured_printers(config: &StationConfig) -> Vec<crate::config::PrinterConfig> {
+    let mut printers = if config.printers.is_empty() { vec![config.printer.clone()] } else { config.printers.clone() };
+    if !printers.iter().any(|printer| printer.local_id == config.printer.local_id) {
+        printers.insert(0, config.printer.clone());
+    }
+    printers
+}
+
 #[tauri::command]
 pub async fn enroll_agent(server_url: String, code: String, station_label: String) -> Result<EnrollmentResult, String> {
     let client = reqwest::Client::new();
@@ -152,16 +168,17 @@ pub async fn heartbeat_once(config: StationConfig) -> Result<serde_json::Value, 
         .bearer_auth(token)
         .json(&json!({
             "appVersion": config.app_version,
-            "devices": [
-                build_scale_device(&config.scale),
-                {
+            "devices": configured_scales(&config)
+                .into_iter()
+                .map(|scale| build_scale_device(&scale))
+                .chain(configured_printers(&config).into_iter().map(|printer| json!({
                     "kind": "PRINTER",
-                    "localId": config.printer.local_id,
-                    "name": config.printer.queue_name.clone().or(config.printer.host.clone()).unwrap_or_else(|| "Impressora".to_string()),
+                    "localId": printer.local_id,
+                    "name": printer.queue_name.clone().or(printer.host.clone()).unwrap_or_else(|| "Impressora".to_string()),
                     "status": "ONLINE",
-                    "config": config.printer
-                }
-            ]
+                    "config": printer
+                })))
+                .collect::<Vec<_>>()
         }))
         .send()
         .await

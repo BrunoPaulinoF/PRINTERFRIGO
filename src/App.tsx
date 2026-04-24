@@ -16,9 +16,9 @@ import {
   testPrintZpl,
   testScaleParse,
 } from "./api";
-import type { AiProposedAction, PortInfo, StationConfig } from "./types";
+import type { AiProposedAction, PortInfo, PrinterConfig, ScaleConfig, StationConfig } from "./types";
 
-const VERSION = "0.1.9";
+const VERSION = "0.2.0";
 const DEFAULT_SERVER_URL = "https://kyberfrigo.kybernan.com.br";
 
 type HardwareSession = {
@@ -33,6 +33,7 @@ type HardwareSession = {
 
 type PrintJob = {
   id: string;
+  printer_local_id?: string | null;
   payload: { zpl?: string; volumeCode?: string };
 };
 
@@ -86,16 +87,56 @@ function isLocalServerUrl(url: string) {
 }
 
 function normalizeConfig(config: StationConfig): StationConfig {
+  const scale = { ...defaultConfig.scale, ...config.scale };
+  const printer = { ...defaultConfig.printer, ...config.printer };
+  const scales = normalizeScales(config.scales, scale);
+  const printers = normalizePrinters(config.printers, printer);
   const merged = {
     ...defaultConfig,
     ...config,
-    scale: { ...defaultConfig.scale, ...config.scale },
-    printer: { ...defaultConfig.printer, ...config.printer },
+    scale,
+    printer,
+    scales,
+    printers,
   };
   if (import.meta.env.PROD && isLocalServerUrl(merged.serverUrl)) {
     return { ...merged, serverUrl: DEFAULT_SERVER_URL };
   }
   return merged;
+}
+
+function normalizeScales(scales: ScaleConfig[] | undefined, fallback: ScaleConfig) {
+  const items = (scales && scales.length > 0 ? scales : [fallback])
+    .map((scale) => ({ ...defaultConfig.scale, ...scale }))
+    .filter((scale, index, all) => scale.port || index === 0 && all.length === 1);
+  if (!items.some((scale) => scale.port === fallback.port)) items.unshift(fallback);
+  return dedupeBy(items, (scale) => scale.port || "default-scale");
+}
+
+function normalizePrinters(printers: PrinterConfig[] | undefined, fallback: PrinterConfig) {
+  const items = (printers && printers.length > 0 ? printers : [fallback])
+    .map((printer) => ({ ...defaultConfig.printer, ...printer }))
+    .filter((printer, index, all) => printer.localId || printer.queueName || printer.host || index === 0 && all.length === 1);
+  if (!items.some((printer) => printer.localId === fallback.localId)) items.unshift(fallback);
+  return dedupeBy(items, (printer) => printer.localId || printer.queueName || printer.host || "default-printer");
+}
+
+function dedupeBy<T>(items: T[], keyOf: (item: T) => string) {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = keyOf(item);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function scaleLabel(scale: ScaleConfig, index: number) {
+  return scale.port ? `${scale.port}` : `Balanca ${index + 1}`;
+}
+
+function printerLabel(printer: PrinterConfig, index: number) {
+  return printer.queueName || printer.host || printer.localId || `Impressora ${index + 1}`;
 }
 
 function errorMessage(error: unknown, fallback: string) {
@@ -140,15 +181,17 @@ export function App() {
   const handledJobs = useRef(new Set<string>());
   const autoSessions = useRef(new Map<string, AutoSessionState>());
   const isEnrolled = Boolean(config.agentId && config.token);
+  const scales = config.scales?.length ? config.scales : [config.scale];
+  const printersConfig = config.printers?.length ? config.printers : [config.printer];
 
   useEffect(() => {
     loadConfig()
       .then((saved) => {
         if (saved) {
-          const normalized = normalizeConfig(saved);
+          const normalized = normalizeConfig({ ...saved, appVersion: VERSION });
           setConfig(normalized);
-          if (JSON.stringify(normalized) !== JSON.stringify(saved) || normalized.appVersion !== VERSION) {
-            void saveConfig({ ...normalized, appVersion: VERSION }).catch(() => undefined);
+          if (JSON.stringify(normalized) !== JSON.stringify(saved)) {
+            void saveConfig(normalized).catch(() => undefined);
           }
         }
         setStatus(saved?.agentId ? "Agente matriculado." : "Aguardando matricula.");
@@ -172,7 +215,9 @@ export function App() {
   async function persist(next = config) {
     setIsBusy(true);
     try {
-      await saveConfig({ ...next, appVersion: VERSION });
+      const normalized = normalizeConfig({ ...next, appVersion: VERSION });
+      await saveConfig(normalized);
+      setConfig(normalized);
       setStatus("Configuracao salva.");
     } finally {
       setIsBusy(false);
@@ -196,14 +241,71 @@ export function App() {
         token: result.token,
         stationLabel: result.stationLabel || config.stationLabel,
       };
-      setConfig(next);
-      await saveConfig(next);
+      const normalized = normalizeConfig(next);
+      setConfig(normalized);
+      await saveConfig(normalized);
       setStatus(`Matriculado como ${result.name}.`);
     } catch (error) {
       setStatus(errorMessage(error, "Falha na matricula."));
     } finally {
       setIsBusy(false);
     }
+  }
+
+  function updateScaleAt(index: number, patch: Partial<ScaleConfig>) {
+    const nextScales = [...scales];
+    nextScales[index] = { ...nextScales[index], ...patch };
+    setConfig((prev) => ({ ...prev, scale: nextScales[0], scales: nextScales }));
+  }
+
+  function addScale() {
+    setConfig((prev) => {
+      const nextScales = [...(prev.scales?.length ? prev.scales : [prev.scale]), { ...defaultConfig.scale, port: "" }];
+      return { ...prev, scales: nextScales };
+    });
+  }
+
+  function removeScale(index: number) {
+    setConfig((prev) => {
+      const nextScales = (prev.scales?.length ? prev.scales : [prev.scale]).filter((_, itemIndex) => itemIndex !== index);
+      const safeScales = nextScales.length > 0 ? nextScales : [{ ...defaultConfig.scale }];
+      return { ...prev, scale: safeScales[0], scales: safeScales };
+    });
+  }
+
+  function updatePrinterAt(index: number, patch: Partial<PrinterConfig>) {
+    const nextPrinters = [...printersConfig];
+    nextPrinters[index] = { ...nextPrinters[index], ...patch };
+    setConfig((prev) => ({ ...prev, printer: nextPrinters[0], printers: nextPrinters }));
+  }
+
+  function addPrinter() {
+    setConfig((prev) => {
+      const nextPrinters = [...(prev.printers?.length ? prev.printers : [prev.printer]), { ...defaultConfig.printer, localId: `label-${Date.now()}` }];
+      return { ...prev, printers: nextPrinters };
+    });
+  }
+
+  function removePrinter(index: number) {
+    setConfig((prev) => {
+      const nextPrinters = (prev.printers?.length ? prev.printers : [prev.printer]).filter((_, itemIndex) => itemIndex !== index);
+      const safePrinters = nextPrinters.length > 0 ? nextPrinters : [{ ...defaultConfig.printer }];
+      return { ...prev, printer: safePrinters[0], printers: safePrinters };
+    });
+  }
+
+  function scaleForSession(session: HardwareSession) {
+    const localId = typeof session.context.scaleLocalId === "string" ? session.context.scaleLocalId : "";
+    return scales.find((scale) => scale.port === localId) ?? config.scale;
+  }
+
+  function printerForLocalId(localId: string | null | undefined) {
+    if (!localId) return config.printer;
+    return printersConfig.find((printer) =>
+      printer.localId === localId ||
+      printer.queueName === localId ||
+      printer.host === localId
+    ) ?? config.printer;
   }
 
   async function testParser() {
@@ -272,7 +374,7 @@ export function App() {
       try {
         const zpl = job.payload?.zpl;
         if (!zpl) throw new Error("Job sem payload ZPL.");
-        await testPrintZpl(config.printer, zpl);
+        await testPrintZpl(printerForLocalId(job.printer_local_id), zpl);
         await reportPrintJob(job.id, "PRINTED");
       } catch (error) {
         await reportPrintJob(job.id, "FAILED", error instanceof Error ? error.message : "Falha ao imprimir.");
@@ -283,7 +385,7 @@ export function App() {
       const commandId = session.command?.id;
       if (session.command?.type !== "REQUEST_CAPTURE" || !commandId || handledCommands.current.has(commandId)) continue;
       handledCommands.current.add(commandId);
-      const weight = await readScaleOnce(config.scale);
+      const weight = await readScaleOnce(scaleForSession(session));
       setLastWeight(weight);
       await submitCapture(session, weight, commandId);
     }
@@ -291,24 +393,25 @@ export function App() {
     for (const session of sessions) {
       if (session.mode !== "AUTO" || session.status !== "ACTIVE") continue;
       const state = autoSessions.current.get(session.id) ?? { samples: [], waitingZero: false, lastCapturedAt: 0 };
-      const weight = await readScaleOnce(config.scale);
+      const scale = scaleForSession(session);
+      const weight = await readScaleOnce(scale);
       setLastWeight(weight);
 
-      if (weight <= config.scale.zeroThresholdKg) {
+      if (weight <= scale.zeroThresholdKg) {
         state.waitingZero = false;
         state.samples = [];
         autoSessions.current.set(session.id, state);
         continue;
       }
 
-      state.samples = [...state.samples, weight].slice(-Math.max(2, config.scale.stableWindow));
-      const cooldownElapsed = Date.now() - state.lastCapturedAt >= config.scale.cooldownMs;
+      state.samples = [...state.samples, weight].slice(-Math.max(2, scale.stableWindow));
+      const cooldownElapsed = Date.now() - state.lastCapturedAt >= scale.cooldownMs;
       if (
         !state.waitingZero &&
         cooldownElapsed &&
-        weight >= config.scale.minWeightKg &&
-        state.samples.length >= Math.max(2, config.scale.stableWindow) &&
-        isStable(state.samples, config.scale.stableThresholdKg)
+        weight >= scale.minWeightKg &&
+        state.samples.length >= Math.max(2, scale.stableWindow) &&
+        isStable(state.samples, scale.stableThresholdKg)
       ) {
         const captureId = `auto-${Date.now()}`;
         await submitCapture(session, weight, captureId);
@@ -482,17 +585,26 @@ export function App() {
 
         <div className="panel">
           <h2><Scale size={18} /> Balanca</h2>
-          <label>Porta serial</label>
-          <select value={config.scale.port} onChange={(e) => setConfig({ ...config, scale: { ...config.scale, port: e.target.value } })}>
-            <option value="">Selecionar porta</option>
-            {ports.map((port) => <option key={port.name} value={port.name}>{port.name} - {port.kind}</option>)}
-          </select>
-          <div className="split">
-            <div><label>Baud</label><input type="number" value={config.scale.baudRate} onChange={(e) => setConfig({ ...config, scale: { ...config.scale, baudRate: Number(e.target.value) } })} /></div>
-            <div><label>Peso minimo kg</label><input type="number" value={config.scale.minWeightKg} onChange={(e) => setConfig({ ...config, scale: { ...config.scale, minWeightKg: Number(e.target.value) } })} /></div>
-          </div>
-          <label>Regex parser</label>
-          <input value={config.scale.parserRegex} onChange={(e) => setConfig({ ...config, scale: { ...config.scale, parserRegex: e.target.value } })} />
+          {scales.map((scale, index) => (
+            <div className="device-box" key={`${scale.port}-${index}`}>
+              <div className="row spread">
+                <strong>{scaleLabel(scale, index)}</strong>
+                {scales.length > 1 && <button onClick={() => removeScale(index)} disabled={isBusy}>Remover</button>}
+              </div>
+              <label>Porta serial</label>
+              <select value={scale.port} onChange={(e) => updateScaleAt(index, { port: e.target.value })}>
+                <option value="">Selecionar porta</option>
+                {ports.map((port) => <option key={port.name} value={port.name}>{port.name} - {port.kind}</option>)}
+              </select>
+              <div className="split">
+                <div><label>Baud</label><input type="number" value={scale.baudRate} onChange={(e) => updateScaleAt(index, { baudRate: Number(e.target.value) })} /></div>
+                <div><label>Peso minimo kg</label><input type="number" value={scale.minWeightKg} onChange={(e) => updateScaleAt(index, { minWeightKg: Number(e.target.value) })} /></div>
+              </div>
+              <label>Regex parser</label>
+              <input value={scale.parserRegex} onChange={(e) => updateScaleAt(index, { parserRegex: e.target.value })} />
+            </div>
+          ))}
+          <button onClick={addScale} disabled={isBusy}>Adicionar balanca</button>
           <label>Frame de teste</label>
           <div className="row">
             <input value={scaleFrame} onChange={(e) => setScaleFrame(e.target.value)} />
@@ -503,21 +615,32 @@ export function App() {
 
         <div className="panel">
           <h2><Printer size={18} /> Impressora</h2>
-          <label>Modo</label>
-          <select value={config.printer.mode} onChange={(e) => setConfig({ ...config, printer: { ...config.printer, mode: e.target.value as StationConfig["printer"]["mode"] } })}>
-            <option value="dry_run">Dry-run .zpl</option>
-            <option value="windows_spooler">Fila Windows</option>
-            <option value="tcp_9100">TCP/IP 9100</option>
-          </select>
-          <label>Fila Windows</label>
-          <select value={config.printer.queueName ?? ""} onChange={(e) => setConfig({ ...config, printer: { ...config.printer, queueName: e.target.value } })}>
-            <option value="">Selecionar fila</option>
-            {printers.map((name) => <option key={name} value={name}>{name}</option>)}
-          </select>
-          <div className="split">
-            <div><label>Host TCP</label><input value={config.printer.host ?? ""} onChange={(e) => setConfig({ ...config, printer: { ...config.printer, host: e.target.value } })} /></div>
-            <div><label>Porta</label><input type="number" value={config.printer.port ?? 9100} onChange={(e) => setConfig({ ...config, printer: { ...config.printer, port: Number(e.target.value) } })} /></div>
-          </div>
+          {printersConfig.map((printer, index) => (
+            <div className="device-box" key={`${printer.localId}-${index}`}>
+              <div className="row spread">
+                <strong>{printerLabel(printer, index)}</strong>
+                {printersConfig.length > 1 && <button onClick={() => removePrinter(index)} disabled={isBusy}>Remover</button>}
+              </div>
+              <label>ID local</label>
+              <input value={printer.localId} onChange={(e) => updatePrinterAt(index, { localId: e.target.value })} />
+              <label>Modo</label>
+              <select value={printer.mode} onChange={(e) => updatePrinterAt(index, { mode: e.target.value as StationConfig["printer"]["mode"] })}>
+                <option value="dry_run">Dry-run .zpl</option>
+                <option value="windows_spooler">Fila Windows</option>
+                <option value="tcp_9100">TCP/IP 9100</option>
+              </select>
+              <label>Fila Windows</label>
+              <select value={printer.queueName ?? ""} onChange={(e) => updatePrinterAt(index, { queueName: e.target.value, localId: e.target.value || printer.localId })}>
+                <option value="">Selecionar fila</option>
+                {printers.map((name) => <option key={name} value={name}>{name}</option>)}
+              </select>
+              <div className="split">
+                <div><label>Host TCP</label><input value={printer.host ?? ""} onChange={(e) => updatePrinterAt(index, { host: e.target.value })} /></div>
+                <div><label>Porta</label><input type="number" value={printer.port ?? 9100} onChange={(e) => updatePrinterAt(index, { port: Number(e.target.value) })} /></div>
+              </div>
+            </div>
+          ))}
+          <button onClick={addPrinter} disabled={isBusy}>Adicionar impressora</button>
           <div className="row">
             <button onClick={testPrinter} disabled={isBusy}>Teste ZPL</button>
             <button onClick={refreshDevices}><RefreshCw size={15} /> Atualizar</button>

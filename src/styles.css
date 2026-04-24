@@ -127,6 +127,18 @@ h2 {
   flex: 1;
 }
 
+.spread {
+  justify-content: space-between;
+}
+
+.device-box {
+  border: 1px solid #e4ebe0;
+  border-radius: 8px;
+  background: #f9fbf8;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
 .split {
   display: grid;
   grid-template-columns: 1fr 1fr;

@@ -32,6 +32,8 @@ export type StationConfig = {
   appVersion: string;
   scale: ScaleConfig;
   printer: PrinterConfig;
+  scales?: ScaleConfig[];
+  printers?: PrinterConfig[];
 };
 
 export type EnrollmentResult = {
