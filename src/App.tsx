@@ -18,7 +18,7 @@ import {
 } from "./api";
 import type { AiProposedAction, PortInfo, StationConfig } from "./types";
 
-const VERSION = "0.1.8";
+const VERSION = "0.1.9";
 const DEFAULT_SERVER_URL = "https://kyberfrigo.kybernan.com.br";
 
 type HardwareSession = {
@@ -112,6 +112,14 @@ function errorMessage(error: unknown, fallback: string) {
   return fallback;
 }
 
+function networkErrorMessage(error: unknown, serverUrl: string) {
+  const message = errorMessage(error, "Falha de conexao.");
+  if (/failed to fetch/i.test(message)) {
+    return `Nao foi possivel conectar ao KyberFrigo em ${serverUrl}. Verifique se o site/API esta online, se a URL esta correta e se o app foi matriculado novamente apos o deploy.`;
+  }
+  return message;
+}
+
 export function App() {
   const [config, setConfig] = useState<StationConfig>(defaultConfig);
   const [ports, setPorts] = useState<PortInfo[]>([]);
@@ -136,7 +144,13 @@ export function App() {
   useEffect(() => {
     loadConfig()
       .then((saved) => {
-        if (saved) setConfig(normalizeConfig(saved));
+        if (saved) {
+          const normalized = normalizeConfig(saved);
+          setConfig(normalized);
+          if (JSON.stringify(normalized) !== JSON.stringify(saved) || normalized.appVersion !== VERSION) {
+            void saveConfig({ ...normalized, appVersion: VERSION }).catch(() => undefined);
+          }
+        }
         setStatus(saved?.agentId ? "Agente matriculado." : "Aguardando matricula.");
       })
       .catch((error) => setStatus(String(error)));
@@ -389,7 +403,7 @@ export function App() {
       setAiActions(Array.isArray(payload.proposedActions) ? payload.proposedActions : []);
       setStatus("IA gerou diagnostico e acoes propostas.");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Falha na IA admin.";
+      const message = networkErrorMessage(error, config.serverUrl);
       setAiError(message);
       setAiReply("");
       setAiActions([]);
@@ -430,7 +444,7 @@ export function App() {
       }
       await refreshDevices();
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Falha ao executar acao.";
+      const message = networkErrorMessage(error, config.serverUrl);
       setAiError(message);
       setStatus(message);
     } finally {
