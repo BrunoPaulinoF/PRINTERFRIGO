@@ -76,6 +76,14 @@ pub fn test_scale_parse(frame: String, parser_regex: String) -> Result<f64, Stri
 
 #[tauri::command]
 pub fn read_scale_once(config: ScaleConfig) -> Result<f64, String> {
+    if config.mode.as_deref() == Some("simulated") {
+        let weight = config.simulated_weight_kg.unwrap_or(12.345);
+        if weight <= 0.0 {
+            return Err("Peso simulado precisa ser maior que zero.".to_string());
+        }
+        return Ok(weight);
+    }
+
     if config.port.trim().is_empty() {
         return Err("Porta serial da balanca nao configurada.".to_string());
     }
@@ -110,10 +118,15 @@ pub fn read_scale_once(config: ScaleConfig) -> Result<f64, String> {
 
 #[allow(dead_code)]
 pub fn build_scale_device(config: &ScaleConfig) -> serde_json::Value {
+    let simulated = config.mode.as_deref() == Some("simulated");
     json!({
         "kind": "SCALE",
         "localId": config.port,
-        "name": format!("Balanca {}", config.port),
+        "name": if simulated {
+            format!("Balanca simulada {}", config.port)
+        } else {
+            format!("Balanca {}", config.port)
+        },
         "status": if config.port.is_empty() { "OFFLINE" } else { "ONLINE" },
         "config": config
     })
@@ -211,5 +224,28 @@ mod tests {
     fn detects_stability_window() {
         assert!(is_stable(&[20.010, 20.015, 20.020], 0.02));
         assert!(!is_stable(&[20.010, 20.080, 20.020], 0.02));
+    }
+
+    #[test]
+    fn reads_simulated_scale() {
+        let config = ScaleConfig {
+            mode: Some("simulated".to_string()),
+            port: "Balanca 1".to_string(),
+            simulated_weight_kg: Some(12.345),
+            baud_rate: 9600,
+            data_bits: 8,
+            stop_bits: 1,
+            parity: "none".to_string(),
+            read_command: None,
+            parser_regex: r"([-+]?\d+[\.,]?\d*)\s*kg?".to_string(),
+            stable_window: 5,
+            stable_threshold_kg: 0.02,
+            stable_ms: 1200,
+            min_weight_kg: 1.0,
+            cooldown_ms: 1500,
+            zero_threshold_kg: 0.25,
+        };
+        let weight = read_scale_once(config).unwrap();
+        assert!((weight - 12.345).abs() < 0.0001);
     }
 }

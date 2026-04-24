@@ -6,7 +6,9 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScaleConfig {
+    pub mode: Option<String>,
     pub port: String,
+    pub simulated_weight_kg: Option<f64>,
     pub baud_rate: u32,
     pub data_bits: u8,
     pub stop_bits: u8,

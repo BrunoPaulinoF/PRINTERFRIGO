@@ -20,7 +20,7 @@ import {
 } from "./api";
 import type { AiProposedAction, PortInfo, PrinterConfig, ScaleConfig, StationConfig } from "./types";
 
-const VERSION = "0.2.5";
+const VERSION = "0.2.6";
 const DEFAULT_SERVER_URL = "https://kyberfrigo.kybernan.com.br";
 const ACTIVE_SERVICE_POLL_MS = 2000;
 const IDLE_SERVICE_POLL_MS = 300000;
@@ -69,7 +69,9 @@ const defaultConfig: StationConfig = {
   stationLabel: "Estacao PRINTERFRIGO",
   appVersion: VERSION,
   scale: {
+    mode: "serial",
     port: "",
+    simulatedWeightKg: 12.345,
     baudRate: 9600,
     dataBits: 8,
     stopBits: 1,
@@ -117,7 +119,7 @@ function normalizeConfig(config: StationConfig): StationConfig {
 function normalizeScales(scales: ScaleConfig[] | undefined, fallback: ScaleConfig) {
   const items = (scales && scales.length > 0 ? scales : [fallback])
     .map((scale) => ({ ...defaultConfig.scale, ...scale }))
-    .filter((scale, index, all) => scale.port || index === 0 && all.length === 1);
+    .filter((scale, index, all) => scale.port || scale.mode === "simulated" || index === 0 && all.length === 1);
   if (!items.some((scale) => scale.port === fallback.port)) items.unshift(fallback);
   return dedupeBy(items, (scale) => scale.port || "default-scale");
 }
@@ -141,6 +143,7 @@ function dedupeBy<T>(items: T[], keyOf: (item: T) => string) {
 }
 
 function scaleLabel(scale: ScaleConfig, index: number) {
+  if (scale.mode === "simulated") return `${scale.port || `Balanca ${index + 1}`} (simulada)`;
   return scale.port ? `${scale.port}` : `Balanca ${index + 1}`;
 }
 
@@ -732,11 +735,30 @@ export function App() {
                 <strong>{scaleLabel(scale, index)}</strong>
                 {scales.length > 1 && <button onClick={() => removeScale(index)} disabled={isBusy}>Remover</button>}
               </div>
-              <label>Porta serial</label>
-              <select value={scale.port} onChange={(e) => updateScaleAt(index, { port: e.target.value })}>
-                <option value="">Selecionar porta</option>
-                {ports.map((port) => <option key={port.name} value={port.name}>{port.name} - {port.kind}</option>)}
+              <label>Modo</label>
+              <select value={scale.mode ?? "serial"} onChange={(e) => updateScaleAt(index, {
+                mode: e.target.value as ScaleConfig["mode"],
+                port: e.target.value === "simulated" ? (scale.port || "Balanca 1") : "",
+              })}>
+                <option value="serial">Serial real</option>
+                <option value="simulated">Simulada para teste</option>
               </select>
+              {scale.mode === "simulated" ? (
+                <>
+                  <label>ID local</label>
+                  <input value={scale.port} onChange={(e) => updateScaleAt(index, { port: e.target.value })} placeholder="Ex: Balanca 1" />
+                  <label>Peso simulado kg</label>
+                  <input type="number" step="0.001" value={scale.simulatedWeightKg ?? 12.345} onChange={(e) => updateScaleAt(index, { simulatedWeightKg: Number(e.target.value) })} />
+                </>
+              ) : (
+                <>
+                  <label>Porta serial</label>
+                  <select value={scale.port} onChange={(e) => updateScaleAt(index, { port: e.target.value })}>
+                    <option value="">Selecionar porta</option>
+                    {ports.map((port) => <option key={port.name} value={port.name}>{port.name} - {port.kind}</option>)}
+                  </select>
+                </>
+              )}
               <div className="split">
                 <div><label>Baud</label><input type="number" value={scale.baudRate} onChange={(e) => updateScaleAt(index, { baudRate: Number(e.target.value) })} /></div>
                 <div><label>Peso minimo kg</label><input type="number" value={scale.minWeightKg} onChange={(e) => updateScaleAt(index, { minWeightKg: Number(e.target.value) })} /></div>
