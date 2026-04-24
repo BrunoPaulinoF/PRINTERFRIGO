@@ -7,6 +7,10 @@ mod queue;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::Manager;
+#[cfg(not(debug_assertions))]
+use tauri_plugin_updater::UpdaterExt;
+#[cfg(not(debug_assertions))]
+use std::time::Duration;
 
 pub fn run() {
     tauri::Builder::default()
@@ -39,6 +43,24 @@ pub fn run() {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.hide();
                 }
+            }
+
+            #[cfg(not(debug_assertions))]
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    tauri::async_runtime::sleep(Duration::from_secs(10)).await;
+                    match handle.updater() {
+                        Ok(updater) => match updater.check().await {
+                            Ok(Some(update)) => {
+                                let _ = update.download_and_install(|_, _| {}, || {}).await;
+                            }
+                            Ok(None) => {}
+                            Err(err) => eprintln!("Falha ao checar update: {err}"),
+                        },
+                        Err(err) => eprintln!("Falha ao inicializar updater: {err}"),
+                    }
+                });
             }
 
             Ok(())

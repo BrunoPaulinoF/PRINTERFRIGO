@@ -18,7 +18,7 @@ import {
 } from "./api";
 import type { AiProposedAction, PortInfo, StationConfig } from "./types";
 
-const VERSION = "0.1.4";
+const VERSION = "0.1.5";
 
 type HardwareSession = {
   id: string;
