@@ -18,7 +18,7 @@ import {
 } from "./api";
 import type { AiProposedAction, PortInfo, PrinterConfig, ScaleConfig, StationConfig } from "./types";
 
-const VERSION = "0.2.0";
+const VERSION = "0.2.1";
 const DEFAULT_SERVER_URL = "https://kyberfrigo.kybernan.com.br";
 
 type HardwareSession = {
@@ -604,7 +604,7 @@ export function App() {
               <input value={scale.parserRegex} onChange={(e) => updateScaleAt(index, { parserRegex: e.target.value })} />
             </div>
           ))}
-          <button onClick={addScale} disabled={isBusy}>Adicionar balanca</button>
+          <button className="add-device-button" onClick={addScale} disabled={isBusy}>Adicionar balanca</button>
           <label>Frame de teste</label>
           <div className="row">
             <input value={scaleFrame} onChange={(e) => setScaleFrame(e.target.value)} />
@@ -640,7 +640,7 @@ export function App() {
               </div>
             </div>
           ))}
-          <button onClick={addPrinter} disabled={isBusy}>Adicionar impressora</button>
+          <button className="add-device-button" onClick={addPrinter} disabled={isBusy}>Adicionar impressora</button>
           <div className="row">
             <button onClick={testPrinter} disabled={isBusy}>Teste ZPL</button>
             <button onClick={refreshDevices}><RefreshCw size={15} /> Atualizar</button>

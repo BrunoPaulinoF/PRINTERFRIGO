@@ -139,6 +139,10 @@ h2 {
   margin-bottom: 12px;
 }
 
+.add-device-button {
+  margin: 4px 0 14px;
+}
+
 .split {
   display: grid;
   grid-template-columns: 1fr 1fr;
