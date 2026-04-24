@@ -20,10 +20,11 @@ import {
 } from "./api";
 import type { AiProposedAction, PortInfo, PrinterConfig, ScaleConfig, StationConfig } from "./types";
 
-const VERSION = "0.2.3";
+const VERSION = "0.2.4";
 const DEFAULT_SERVER_URL = "https://kyberfrigo.kybernan.com.br";
 const ACTIVE_SERVICE_POLL_MS = 2000;
 const IDLE_SERVICE_POLL_MS = 300000;
+const OFFLINE_REALTIME_IDLE_SERVICE_POLL_MS = 60000;
 const MIN_SERVICE_POLL_MS = 1000;
 const MAX_SERVICE_POLL_MS = 600000;
 const REALTIME_TOKEN_REFRESH_MARGIN_MS = 60000;
@@ -190,6 +191,7 @@ export function App() {
   const autoSessions = useRef(new Map<string, AutoSessionState>());
   const serviceNextPollMs = useRef(IDLE_SERVICE_POLL_MS);
   const serviceTicking = useRef(false);
+  const realtimeConnected = useRef(false);
   const isEnrolled = Boolean(config.agentId && config.token);
   const scales = config.scales?.length ? config.scales : [config.scale];
   const printersConfig = config.printers?.length ? config.printers : [config.printer];
@@ -382,7 +384,10 @@ export function App() {
       : printJobs.length > 0 || sessions.length > 0
         ? ACTIVE_SERVICE_POLL_MS
         : IDLE_SERVICE_POLL_MS;
-    serviceNextPollMs.current = Math.min(MAX_SERVICE_POLL_MS, Math.max(MIN_SERVICE_POLL_MS, requestedPollMs));
+    const fallbackAwarePollMs = requestedPollMs === IDLE_SERVICE_POLL_MS && !realtimeConnected.current
+      ? OFFLINE_REALTIME_IDLE_SERVICE_POLL_MS
+      : requestedPollMs;
+    serviceNextPollMs.current = Math.min(MAX_SERVICE_POLL_MS, Math.max(MIN_SERVICE_POLL_MS, fallbackAwarePollMs));
 
     for (const job of printJobs) {
       if (handledJobs.current.has(job.id)) continue;
@@ -535,9 +540,11 @@ export function App() {
           .subscribe((status) => {
             if (cancelled) return;
             if (status === "SUBSCRIBED") {
+              realtimeConnected.current = true;
               setStatus("Realtime conectado. Polling ficou como fallback.");
             }
             if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+              realtimeConnected.current = false;
               setStatus("Realtime indisponivel. Usando polling de fallback.");
             }
           });
@@ -550,6 +557,7 @@ export function App() {
       } catch (error) {
         if (cancelled) return;
         setStatus(error instanceof Error ? error.message : "Falha ao conectar Realtime.");
+        realtimeConnected.current = false;
         refreshTimer = window.setTimeout(connect, IDLE_SERVICE_POLL_MS);
       }
     };
@@ -564,6 +572,7 @@ export function App() {
         void client.removeAllChannels();
         client.realtime.disconnect();
       }
+      realtimeConnected.current = false;
     };
   }, [config.agentId, config.serverUrl, config.token, isEnrolled, serviceTick]);
 
