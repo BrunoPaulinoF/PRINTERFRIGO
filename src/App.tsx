@@ -18,8 +18,12 @@ import {
 } from "./api";
 import type { AiProposedAction, PortInfo, PrinterConfig, ScaleConfig, StationConfig } from "./types";
 
-const VERSION = "0.2.1";
+const VERSION = "0.2.2";
 const DEFAULT_SERVER_URL = "https://kyberfrigo.kybernan.com.br";
+const ACTIVE_SERVICE_POLL_MS = 2000;
+const IDLE_SERVICE_POLL_MS = 30000;
+const MIN_SERVICE_POLL_MS = 1000;
+const MAX_SERVICE_POLL_MS = 120000;
 
 type HardwareSession = {
   id: string;
@@ -40,6 +44,7 @@ type PrintJob = {
 type HeartbeatResult = {
   sessions?: HardwareSession[];
   printJobs?: PrintJob[];
+  nextPollMs?: number;
 };
 
 type AutoSessionState = {
@@ -180,6 +185,8 @@ export function App() {
   const handledCommands = useRef(new Set<string>());
   const handledJobs = useRef(new Set<string>());
   const autoSessions = useRef(new Map<string, AutoSessionState>());
+  const serviceNextPollMs = useRef(IDLE_SERVICE_POLL_MS);
+  const serviceTicking = useRef(false);
   const isEnrolled = Boolean(config.agentId && config.token);
   const scales = config.scales?.length ? config.scales : [config.scale];
   const printersConfig = config.printers?.length ? config.printers : [config.printer];
@@ -367,6 +374,12 @@ export function App() {
     const result = await heartbeatOnce(config) as HeartbeatResult;
     const printJobs = result.printJobs ?? [];
     const sessions = result.sessions ?? [];
+    const requestedPollMs = typeof result.nextPollMs === "number"
+      ? result.nextPollMs
+      : printJobs.length > 0 || sessions.length > 0
+        ? ACTIVE_SERVICE_POLL_MS
+        : IDLE_SERVICE_POLL_MS;
+    serviceNextPollMs.current = Math.min(MAX_SERVICE_POLL_MS, Math.max(MIN_SERVICE_POLL_MS, requestedPollMs));
 
     for (const job of printJobs) {
       if (handledJobs.current.has(job.id)) continue;
@@ -429,10 +442,37 @@ export function App() {
 
   useEffect(() => {
     if (!isEnrolled) return;
-    const timer = window.setInterval(() => {
-      serviceTick().catch((error) => setStatus(error instanceof Error ? error.message : "Falha no servico."));
-    }, 1500);
-    return () => window.clearInterval(timer);
+    let cancelled = false;
+    let timer: number | undefined;
+
+    const schedule = (delayMs: number) => {
+      if (!cancelled) timer = window.setTimeout(run, delayMs);
+    };
+
+    const run = async () => {
+      if (cancelled) return;
+      if (serviceTicking.current) {
+        schedule(serviceNextPollMs.current);
+        return;
+      }
+
+      serviceTicking.current = true;
+      try {
+        await serviceTick();
+      } catch (error) {
+        setStatus(error instanceof Error ? error.message : "Falha no servico.");
+        serviceNextPollMs.current = IDLE_SERVICE_POLL_MS;
+      } finally {
+        serviceTicking.current = false;
+        schedule(serviceNextPollMs.current);
+      }
+    };
+
+    schedule(1000);
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, [isEnrolled, serviceTick]);
 
   async function heartbeat() {
