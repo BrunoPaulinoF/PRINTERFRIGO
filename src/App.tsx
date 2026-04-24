@@ -20,7 +20,7 @@ import {
 } from "./api";
 import type { AiProposedAction, PortInfo, PrinterConfig, ScaleConfig, StationConfig } from "./types";
 
-const VERSION = "0.2.4";
+const VERSION = "0.2.5";
 const DEFAULT_SERVER_URL = "https://kyberfrigo.kybernan.com.br";
 const ACTIVE_SERVICE_POLL_MS = 2000;
 const IDLE_SERVICE_POLL_MS = 300000;
