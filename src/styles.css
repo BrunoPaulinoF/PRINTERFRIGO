@@ -183,6 +183,13 @@ pre {
   border: 1px solid #dce3d8;
 }
 
+.ai-error {
+  min-height: auto;
+  background: #fff1f1;
+  color: #8a1f1f;
+  border: 1px solid #f1b7b7;
+}
+
 .action-list {
   display: flex;
   flex-wrap: wrap;

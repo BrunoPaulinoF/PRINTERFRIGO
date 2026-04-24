@@ -18,7 +18,7 @@ import {
 } from "./api";
 import type { AiProposedAction, PortInfo, StationConfig } from "./types";
 
-const VERSION = "0.1.6";
+const VERSION = "0.1.7";
 
 type HardwareSession = {
   id: string;
@@ -93,6 +93,7 @@ export function App() {
   const [adminToken, setAdminToken] = useState<string | null>(null);
   const [aiInput, setAiInput] = useState("Configure esta estacao para usar a impressora e a balanca conectadas, validando antes de salvar.");
   const [aiReply, setAiReply] = useState("");
+  const [aiError, setAiError] = useState("");
   const [aiActions, setAiActions] = useState<AiProposedAction[]>([]);
   const [aiBusy, setAiBusy] = useState(false);
   const handledCommands = useRef(new Set<string>());
@@ -306,14 +307,33 @@ export function App() {
 
   async function askAi() {
     if (!adminToken) {
-      setStatus("Desbloqueie a area Admin IA.");
+      const message = "Desbloqueie a area Admin IA com a senha de admin antes de conversar com a IA.";
+      setAiError(message);
+      setAiReply("");
+      setAiActions([]);
+      setStatus(message);
       return;
     }
     if (!config.token) {
-      setStatus("Matricule o PRINTERFRIGO antes de usar a IA.");
+      const message = "Matricule o PRINTERFRIGO no KyberFrigo antes de usar a IA. Gere um codigo em Ajustes > Pontos de Pesagem e informe no onboarding.";
+      setAiError(message);
+      setAiReply("");
+      setAiActions([]);
+      setStatus(message);
+      return;
+    }
+    if (!aiInput.trim()) {
+      const message = "Digite o pedido para a IA antes de diagnosticar.";
+      setAiError(message);
+      setAiReply("");
+      setAiActions([]);
+      setStatus(message);
       return;
     }
     setAiBusy(true);
+    setAiError("");
+    setAiReply("Consultando IA admin...");
+    setAiActions([]);
     try {
       const snapshot = await aiCollectSnapshot(adminToken, config);
       const response = await fetch(`${config.serverUrl.replace(/\/$/, "")}/api/hardware/agent/ai/chat`, {
@@ -327,10 +347,15 @@ export function App() {
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error ?? "Falha ao consultar IA.");
       setAiReply(payload.reply ?? "");
+      setAiError("");
       setAiActions(Array.isArray(payload.proposedActions) ? payload.proposedActions : []);
       setStatus("IA gerou diagnostico e acoes propostas.");
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Falha na IA admin.");
+      const message = error instanceof Error ? error.message : "Falha na IA admin.";
+      setAiError(message);
+      setAiReply("");
+      setAiActions([]);
+      setStatus(message);
     } finally {
       setAiBusy(false);
     }
@@ -367,7 +392,9 @@ export function App() {
       }
       await refreshDevices();
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Falha ao executar acao.");
+      const message = error instanceof Error ? error.message : "Falha ao executar acao.";
+      setAiError(message);
+      setStatus(message);
     } finally {
       setAiBusy(false);
     }
@@ -485,6 +512,7 @@ export function App() {
                 </button>
                 <button onClick={() => setAdminToken(null)} disabled={aiBusy}>Bloquear</button>
               </div>
+              {aiError && <pre className="ai-error">{aiError}</pre>}
               {aiReply && <pre className="ai-reply">{aiReply}</pre>}
               {aiActions.length > 0 && (
                 <div className="action-list">
