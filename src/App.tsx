@@ -18,7 +18,8 @@ import {
 } from "./api";
 import type { AiProposedAction, PortInfo, StationConfig } from "./types";
 
-const VERSION = "0.1.7";
+const VERSION = "0.1.8";
+const DEFAULT_SERVER_URL = "https://kyberfrigo.kybernan.com.br";
 
 type HardwareSession = {
   id: string;
@@ -54,7 +55,7 @@ function isStable(samples: number[], thresholdKg: number) {
 }
 
 const defaultConfig: StationConfig = {
-  serverUrl: "http://localhost:3000",
+  serverUrl: DEFAULT_SERVER_URL,
   stationLabel: "Estacao PRINTERFRIGO",
   appVersion: VERSION,
   scale: {
@@ -80,6 +81,37 @@ const defaultConfig: StationConfig = {
   },
 };
 
+function isLocalServerUrl(url: string) {
+  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/?$/i.test(url.trim());
+}
+
+function normalizeConfig(config: StationConfig): StationConfig {
+  const merged = {
+    ...defaultConfig,
+    ...config,
+    scale: { ...defaultConfig.scale, ...config.scale },
+    printer: { ...defaultConfig.printer, ...config.printer },
+  };
+  if (import.meta.env.PROD && isLocalServerUrl(merged.serverUrl)) {
+    return { ...merged, serverUrl: DEFAULT_SERVER_URL };
+  }
+  return merged;
+}
+
+function errorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === "string" && error.trim()) {
+    try {
+      const parsed = JSON.parse(error) as { error?: unknown; message?: unknown };
+      if (typeof parsed.error === "string") return parsed.error;
+      if (typeof parsed.message === "string") return parsed.message;
+    } catch {
+      return error;
+    }
+  }
+  return fallback;
+}
+
 export function App() {
   const [config, setConfig] = useState<StationConfig>(defaultConfig);
   const [ports, setPorts] = useState<PortInfo[]>([]);
@@ -104,7 +136,7 @@ export function App() {
   useEffect(() => {
     loadConfig()
       .then((saved) => {
-        if (saved) setConfig({ ...defaultConfig, ...saved, scale: { ...defaultConfig.scale, ...saved.scale }, printer: { ...defaultConfig.printer, ...saved.printer } });
+        if (saved) setConfig(normalizeConfig(saved));
         setStatus(saved?.agentId ? "Agente matriculado." : "Aguardando matricula.");
       })
       .catch((error) => setStatus(String(error)));
@@ -136,9 +168,15 @@ export function App() {
   async function enroll() {
     setIsBusy(true);
     try {
-      const result = await enrollAgent(config.serverUrl, enrollCode, config.stationLabel);
+      const serverUrl = config.serverUrl.trim() || DEFAULT_SERVER_URL;
+      if (import.meta.env.PROD && isLocalServerUrl(serverUrl)) {
+        throw new Error(`URL KyberFrigo invalida para instalacao: use ${DEFAULT_SERVER_URL}`);
+      }
+      setStatus(`Matriculando em ${serverUrl}...`);
+      const result = await enrollAgent(serverUrl, enrollCode, config.stationLabel);
       const next = {
         ...config,
+        serverUrl,
         agentId: result.agentId,
         tenantId: result.tenantId,
         token: result.token,
@@ -148,7 +186,7 @@ export function App() {
       await saveConfig(next);
       setStatus(`Matriculado como ${result.name}.`);
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Falha na matricula.");
+      setStatus(errorMessage(error, "Falha na matricula."));
     } finally {
       setIsBusy(false);
     }
@@ -371,7 +409,7 @@ export function App() {
         const next = args.config as StationConfig | undefined;
         if (!next) throw new Error("Acao sem config.");
         await aiSaveStationConfig(adminToken, next);
-        setConfig({ ...defaultConfig, ...next, scale: { ...defaultConfig.scale, ...next.scale }, printer: { ...defaultConfig.printer, ...next.printer } });
+        setConfig(normalizeConfig(next));
         setStatus("Configuracao local salva pela IA.");
       } else if (action.tool === "apply_kyberfrigo_config") {
         if (!config.token) throw new Error("Agente nao matriculado.");

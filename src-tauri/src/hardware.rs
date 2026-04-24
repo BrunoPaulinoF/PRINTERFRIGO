@@ -125,14 +125,18 @@ pub async fn enroll_agent(server_url: String, code: String, station_label: Strin
     let url = format!("{}/api/hardware/enroll", server_url.trim_end_matches('/'));
     let response = client
         .post(url)
-        .json(&json!({ "code": code, "stationLabel": station_label }))
+        .json(&json!({ "code": code, "name": station_label, "stationLabel": station_label }))
         .send()
         .await
-        .map_err(|err| err.to_string())?;
+        .map_err(|err| format!("Nao foi possivel conectar ao KyberFrigo: {err}"))?;
     let status = response.status();
     let body = response.text().await.map_err(|err| err.to_string())?;
     if !status.is_success() {
-        return Err(body);
+        let message = serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|value| value.get("error").and_then(|error| error.as_str()).map(str::to_string))
+            .unwrap_or(body);
+        return Err(message);
     }
     serde_json::from_str(&body).map_err(|err| err.to_string())
 }
