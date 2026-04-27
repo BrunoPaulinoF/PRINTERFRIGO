@@ -20,7 +20,7 @@ import {
   testPrintZpl,
   testScaleParse,
 } from "./api";
-import type { AiProposedAction, PortInfo, PrinterConfig, ScaleConfig, StationConfig } from "./types";
+import type { AiProposedAction, PortInfo, PrinterConfig, PrinterInfo, ScaleConfig, StationConfig } from "./types";
 
 const VERSION = "0.2.7";
 const DEFAULT_SERVER_URL = "https://kyberfrigo.kybernan.com.br";
@@ -88,8 +88,8 @@ const defaultConfig: StationConfig = {
     zeroThresholdKg: 0.25,
   },
   printer: {
-    mode: "dry_run",
-    localId: "label-01",
+    mode: "windows_spooler",
+    localId: "",
     port: 9100,
     dryRunDir: "",
   },
@@ -178,7 +178,7 @@ function networkErrorMessage(error: unknown, serverUrl: string) {
 export function App() {
   const [config, setConfig] = useState<StationConfig>(defaultConfig);
   const [ports, setPorts] = useState<PortInfo[]>([]);
-  const [printers, setPrinters] = useState<string[]>([]);
+  const [printers, setPrinters] = useState<PrinterInfo[]>([]);
   const [enrollCode, setEnrollCode] = useState("");
   const [scaleFrame, setScaleFrame] = useState("ST,GS,+0012.345kg");
   const [lastWeight, setLastWeight] = useState<number | null>(null);
@@ -218,7 +218,20 @@ export function App() {
     ensureWindowsAutostart().catch(() => undefined);
   }, []);
 
-  const sampleZpl = useMemo(() => "^XA^CI28^FO40,40^A0N,36,36^FDPRINTERFRIGO^FS^FO40,90^BY2^BCN,80,Y,N,N^FDTESTE-0001^FS^XZ", []);
+  const defaultPrinter = printers.find((printer) => printer.isDefault) ?? printers[0];
+  const sampleZpl = useMemo(() => [
+    "^XA",
+    "^CI28",
+    "^PW799",
+    "^LL480",
+    "^FO35,30^A0N,42,42^FDKYBERFRIGO^FS",
+    "^FO35,84^A0N,30,30^FDTESTE DE IMPRESSAO PRINTERFRIGO^FS",
+    "^FO35,132^GB720,2,2^FS",
+    "^FO35,165^A0N,32,32^FDPESO TESTE: 12,345 KG^FS",
+    "^FO35,215^BY3^BCN,105,Y,N,N^FDTESTE-PRINTERFRIGO-0001^FS",
+    "^FO35,360^A0N,24,24^FDSe esta etiqueta saiu, a fila Windows aceita ZPL RAW.^FS",
+    "^XZ",
+  ].join(""), []);
 
   async function refreshDevices() {
     const [serial, queues] = await Promise.all([
@@ -227,6 +240,24 @@ export function App() {
     ]);
     setPorts(serial);
     setPrinters(queues);
+  }
+
+  async function useDefaultPrinter(index: number) {
+    const printer = defaultPrinter;
+    if (!printer) {
+      setStatus("Nenhuma impressora Windows encontrada. Instale a impressora no Windows e clique Atualizar.");
+      return;
+    }
+    const nextPrinters = [...printersConfig];
+    nextPrinters[index] = {
+      ...nextPrinters[index],
+      mode: "windows_spooler",
+      queueName: printer.name,
+      localId: printer.name,
+      host: "",
+    };
+    await persist({ ...config, printer: nextPrinters[0], printers: nextPrinters });
+    setStatus(`Impressora padrao selecionada: ${printer.name}.`);
   }
 
   async function persist(next = config) {
@@ -335,10 +366,14 @@ export function App() {
     }
   }
 
-  async function testPrinter() {
+  async function testPrinterAt(index: number) {
     setIsBusy(true);
     try {
-      const result = await testPrintZpl(config.printer, sampleZpl);
+      const printer = printersConfig[index] ?? config.printer;
+      if (printer.mode === "windows_spooler" && !printer.queueName) {
+        throw new Error("Selecione a fila Windows antes do teste de impressao.");
+      }
+      const result = await testPrintZpl(printer, sampleZpl);
       setStatus(result);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Falha no teste de impressao.");
@@ -350,6 +385,69 @@ export function App() {
   async function reportPrintJob(jobId: string, nextStatus: "PRINTED" | "FAILED", error?: string) {
     if (!config.token) return;
     await reportPrintJobApi(config, { jobId, status: nextStatus, error });
+  }
+
+  async function syncReceivingConfig() {
+    if (!config.token) {
+      setStatus("Matricule o agente antes de sincronizar com KyberFrigo.");
+      return;
+    }
+    const printer = config.printer;
+    const scale = config.scale;
+    const printerLocalId = printer.queueName || printer.localId || printer.host || "";
+    const scaleLocalId = scale.port || (scale.mode === "simulated" ? "Balanca 1" : "");
+    if (printer.mode === "windows_spooler" && !printer.queueName) {
+      setStatus("Selecione a impressora Windows antes de sincronizar Receiving.");
+      return;
+    }
+    if (printer.mode === "tcp_9100" && !printer.host) {
+      setStatus("Informe IP/Host da impressora TCP antes de sincronizar Receiving.");
+      return;
+    }
+    if (!scaleLocalId) {
+      setStatus("Configure a balanca antes de sincronizar Receiving.");
+      return;
+    }
+
+    setIsBusy(true);
+    try {
+      const response = await fetch(`${config.serverUrl.replace(/\/$/, "")}/api/hardware/agent/configure`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${config.token}`,
+        },
+        body: JSON.stringify({
+          weighingPointId: "receiving",
+          printer: {
+            name: printer.queueName || printer.host || printer.localId || "Impressora PRINTERFRIGO",
+            mode: printer.mode,
+            queueName: printer.queueName,
+            host: printer.host,
+            port: printer.port,
+            localId: printerLocalId,
+            type: "zebra",
+            labelType: "custom",
+          },
+          scale: {
+            name: scale.mode === "simulated" ? "Balanca simulada PRINTERFRIGO" : `Balanca ${scaleLocalId}`,
+            port: scaleLocalId,
+            localId: scaleLocalId,
+            baudRate: scale.baudRate,
+            parserRegex: scale.parserRegex,
+            type: "other",
+            protocol: "custom",
+          },
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error ?? "Falha ao sincronizar Receiving no KyberFrigo.");
+      setStatus("Receiving sincronizado no KyberFrigo. Forcar leitura ja deve capturar peso e imprimir etiqueta.");
+    } catch (error) {
+      setStatus(networkErrorMessage(error, config.serverUrl));
+    } finally {
+      setIsBusy(false);
+    }
   }
 
   async function submitCapture(session: HardwareSession, weight: number, commandId: string) {
@@ -766,34 +864,51 @@ export function App() {
 
         <div className="panel">
           <h2><Printer size={18} /> Impressora</h2>
+          <p className="muted">Caminho recomendado: instale a Zebra/Elgin no Windows, clique em Atualizar, use a impressora padrao e imprima uma etiqueta de teste.</p>
           {printersConfig.map((printer, index) => (
             <div className="device-box" key={`${printer.localId}-${index}`}>
               <div className="row spread">
                 <strong>{printerLabel(printer, index)}</strong>
                 {printersConfig.length > 1 && <button onClick={() => removePrinter(index)} disabled={isBusy}>Remover</button>}
               </div>
-              <label>ID local</label>
-              <input value={printer.localId} onChange={(e) => updatePrinterAt(index, { localId: e.target.value })} />
               <label>Modo</label>
               <select value={printer.mode} onChange={(e) => updatePrinterAt(index, { mode: e.target.value as StationConfig["printer"]["mode"] })}>
-                <option value="dry_run">Dry-run .zpl</option>
                 <option value="windows_spooler">Fila Windows</option>
                 <option value="tcp_9100">TCP/IP 9100</option>
+                <option value="dry_run">Dry-run .zpl</option>
               </select>
-              <label>Fila Windows</label>
-              <select value={printer.queueName ?? ""} onChange={(e) => updatePrinterAt(index, { queueName: e.target.value, localId: e.target.value || printer.localId })}>
-                <option value="">Selecionar fila</option>
-                {printers.map((name) => <option key={name} value={name}>{name}</option>)}
-              </select>
-              <div className="split">
-                <div><label>Host TCP</label><input value={printer.host ?? ""} onChange={(e) => updatePrinterAt(index, { host: e.target.value })} /></div>
-                <div><label>Porta</label><input type="number" value={printer.port ?? 9100} onChange={(e) => updatePrinterAt(index, { port: Number(e.target.value) })} /></div>
-              </div>
+              {printer.mode === "windows_spooler" && (
+                <>
+                  <label>Impressora instalada no Windows</label>
+                  <select value={printer.queueName ?? ""} onChange={(e) => updatePrinterAt(index, { queueName: e.target.value, localId: e.target.value || printer.localId })}>
+                    <option value="">Selecionar impressora</option>
+                    {printers.map((item) => <option key={item.name} value={item.name}>{item.name}{item.isDefault ? " (padrao)" : ""}</option>)}
+                  </select>
+                  <p className="tip">Este nome precisa bater com a fila instalada no Windows. O PRINTERFRIGO envia ZPL RAW direto para essa fila.</p>
+                  <div className="row action-row">
+                    <button onClick={() => useDefaultPrinter(index)} disabled={isBusy || !defaultPrinter}>Usar impressora padrao</button>
+                    <button onClick={() => testPrinterAt(index)} disabled={isBusy || !printer.queueName}>Imprimir etiqueta teste</button>
+                  </div>
+                </>
+              )}
+              {printer.mode === "tcp_9100" && (
+                <div className="split">
+                  <div><label>IP/Host da impressora</label><input value={printer.host ?? ""} onChange={(e) => updatePrinterAt(index, { host: e.target.value, localId: e.target.value || printer.localId })} placeholder="Ex: 192.168.0.50" /></div>
+                  <div><label>Porta TCP</label><input type="number" value={printer.port ?? 9100} onChange={(e) => updatePrinterAt(index, { port: Number(e.target.value) })} /></div>
+                </div>
+              )}
+              {printer.mode === "dry_run" && (
+                <>
+                  <label>ID local</label>
+                  <input value={printer.localId} onChange={(e) => updatePrinterAt(index, { localId: e.target.value })} placeholder="Ex: label-01" />
+                  <p className="tip">Modo teste sem impressora. Salva arquivos .zpl em AppData/PRINTERFRIGO/dry-run.</p>
+                  <button onClick={() => testPrinterAt(index)} disabled={isBusy}>Gerar etiqueta teste .zpl</button>
+                </>
+              )}
             </div>
           ))}
           <button className="add-device-button" onClick={addPrinter} disabled={isBusy}>Adicionar impressora</button>
           <div className="row">
-            <button onClick={testPrinter} disabled={isBusy}>Teste ZPL</button>
             <button onClick={refreshDevices}><RefreshCw size={15} /> Atualizar</button>
           </div>
         </div>
@@ -804,7 +919,9 @@ export function App() {
           <div className="actions">
             <button onClick={() => persist()} disabled={isBusy}><Save size={15} /> Salvar</button>
             <button onClick={heartbeat} disabled={!isEnrolled || isBusy}>Heartbeat</button>
+            <button onClick={syncReceivingConfig} disabled={!isEnrolled || isBusy}>Sincronizar Receiving</button>
           </div>
+          <p className="tip">Use depois de escolher impressora/balanca. Isto vincula a estacao ao ponto Receiving no KyberFrigo.</p>
           <pre>{status}</pre>
         </div>
 

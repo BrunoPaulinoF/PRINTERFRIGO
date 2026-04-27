@@ -7,6 +7,7 @@ import type {
   LocalToolResult,
   PortInfo,
   PrinterConfig,
+  PrinterInfo,
   RealtimeTokenResult,
   StationConfig,
 } from "./types";
@@ -27,7 +28,7 @@ export function listSerialPorts(): Promise<PortInfo[]> {
   return invoke("list_serial_ports");
 }
 
-export function listPrinters(): Promise<string[]> {
+export function listPrinters(): Promise<PrinterInfo[]> {
   return invoke("list_printers");
 }
 

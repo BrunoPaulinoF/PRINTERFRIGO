@@ -174,6 +174,18 @@ h2 {
   font-size: 13px;
 }
 
+.tip {
+  margin: 8px 0 0;
+  color: #657064;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.action-row {
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
 .reading {
   margin: 14px 0 0;
   color: #1f6f50;

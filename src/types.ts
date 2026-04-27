@@ -25,6 +25,11 @@ export type PrinterConfig = {
   dryRunDir?: string;
 };
 
+export type PrinterInfo = {
+  name: string;
+  isDefault: boolean;
+};
+
 export type StationConfig = {
   serverUrl: string;
   agentId?: string;
