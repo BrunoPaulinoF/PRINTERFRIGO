@@ -192,6 +192,7 @@ export function App() {
   const [aiActions, setAiActions] = useState<AiProposedAction[]>([]);
   const [aiBusy, setAiBusy] = useState(false);
   const handledCommands = useRef(new Set<string>());
+  const processingCommands = useRef(new Set<string>());
   const handledJobs = useRef(new Set<string>());
   const autoSessions = useRef(new Map<string, AutoSessionState>());
   const serviceNextPollMs = useRef(IDLE_SERVICE_POLL_MS);
@@ -493,11 +494,28 @@ export function App() {
 
     for (const session of sessions) {
       const commandId = session.command?.id;
-      if (session.command?.type !== "REQUEST_CAPTURE" || !commandId || handledCommands.current.has(commandId)) continue;
-      const weight = await readScaleOnce(scaleForSession(session));
-      setLastWeight(weight);
-      await submitCapture(session, weight, commandId);
-      handledCommands.current.add(commandId);
+      if (
+        session.command?.type !== "REQUEST_CAPTURE" ||
+        !commandId ||
+        handledCommands.current.has(commandId) ||
+        processingCommands.current.has(commandId)
+      ) continue;
+      processingCommands.current.add(commandId);
+      try {
+        const scale = scaleForSession(session);
+        const weight = await readScaleOnce(scale);
+        setLastWeight(weight);
+        if (weight < scale.minWeightKg) {
+          handledCommands.current.add(commandId);
+          throw new Error(`Peso ${weight.toFixed(3)} kg abaixo do minimo ${scale.minWeightKg.toFixed(3)} kg.`);
+        }
+        await submitCapture(session, weight, commandId);
+        handledCommands.current.add(commandId);
+      } catch (error) {
+        setStatus(error instanceof Error ? error.message : "Falha ao capturar peso.");
+      } finally {
+        processingCommands.current.delete(commandId);
+      }
     }
 
     for (const session of sessions) {
@@ -584,9 +602,15 @@ export function App() {
       if (wakeTimer !== undefined) window.clearTimeout(wakeTimer);
       wakeTimer = window.setTimeout(() => {
         if (cancelled) return;
-        serviceTick().catch((error) => {
-          setStatus(error instanceof Error ? error.message : "Falha ao processar evento Realtime.");
-        });
+        if (serviceTicking.current) return;
+        serviceTicking.current = true;
+        serviceTick()
+          .catch((error) => {
+            setStatus(error instanceof Error ? error.message : "Falha ao processar evento Realtime.");
+          })
+          .finally(() => {
+            serviceTicking.current = false;
+          });
       }, 150);
     };
 
