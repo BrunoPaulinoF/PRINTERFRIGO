@@ -4,13 +4,13 @@ mod hardware;
 mod printing;
 mod queue;
 
-use tauri::menu::{Menu, MenuItem};
-use tauri::tray::TrayIconBuilder;
-use tauri::Manager;
-#[cfg(not(debug_assertions))]
-use tauri_plugin_updater::UpdaterExt;
 #[cfg(not(debug_assertions))]
 use std::time::Duration;
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{Manager, WindowEvent};
+#[cfg(not(debug_assertions))]
+use tauri_plugin_updater::UpdaterExt;
 
 pub fn run() {
     tauri::Builder::default()
@@ -21,12 +21,40 @@ pub fn run() {
             config::init_storage().map_err(|err| err.to_string())?;
 
             let show = MenuItem::with_id(app, "show", "Abrir", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "Sair", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "Fechar", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &quit])?;
 
-            TrayIconBuilder::new()
+            if let Some(window) = app.get_webview_window("main") {
+                let window_to_hide = window.clone();
+                window.on_window_event(move |event| {
+                    if let WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = window_to_hide.hide();
+                    }
+                });
+            }
+
+            let mut tray_builder = TrayIconBuilder::new()
                 .tooltip("PRINTERFRIGO")
                 .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_tray_icon_event(|tray, event| match event {
+                    TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    }
+                    | TrayIconEvent::DoubleClick {
+                        button: MouseButton::Left,
+                        ..
+                    } => {
+                        if let Some(window) = tray.app_handle().get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                    _ => {}
+                })
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "show" => {
                         if let Some(window) = app.get_webview_window("main") {
@@ -36,8 +64,11 @@ pub fn run() {
                     }
                     "quit" => app.exit(0),
                     _ => {}
-                })
-                .build(app)?;
+                });
+            if let Some(icon) = app.default_window_icon().cloned() {
+                tray_builder = tray_builder.icon(icon);
+            }
+            tray_builder.build(app)?;
 
             if std::env::args().any(|arg| arg == "--minimized") {
                 if let Some(window) = app.get_webview_window("main") {

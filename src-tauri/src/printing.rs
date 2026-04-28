@@ -8,6 +8,12 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::{io, ptr};
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrinterInfo {
@@ -19,14 +25,15 @@ pub struct PrinterInfo {
 pub fn list_printers() -> Result<Vec<PrinterInfo>, String> {
     #[cfg(target_os = "windows")]
     {
-        let output = Command::new("powershell")
+        let mut command = Command::new("powershell");
+        command
+            .creation_flags(CREATE_NO_WINDOW)
             .args([
                 "-NoProfile",
                 "-Command",
                 "Get-CimInstance Win32_Printer | Sort-Object Name | ForEach-Object { \"$($_.Name)`t$($_.Default)\" }",
-            ])
-            .output()
-            .map_err(|err| err.to_string())?;
+            ]);
+        let output = command.output().map_err(|err| err.to_string())?;
         if !output.status.success() {
             return Ok(Vec::new());
         }

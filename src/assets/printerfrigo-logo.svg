@@ -1,0 +1,18 @@
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="PRINTERFRIGO">
+  <rect width="128" height="128" rx="30" fill="url(#bg)"/>
+  <path d="M28 42C28 35.3726 33.3726 30 40 30H88C94.6274 30 100 35.3726 100 42V57H28V42Z" fill="#E9F7EF"/>
+  <path d="M35 53H93C100.18 53 106 58.8203 106 66V88C106 92.4183 102.418 96 98 96H30C25.5817 96 22 92.4183 22 88V66C22 58.8203 27.8203 53 35 53Z" fill="#F7FBF8"/>
+  <path d="M39 74H89V105C89 108.866 85.866 112 82 112H46C42.134 112 39 108.866 39 105V74Z" fill="#FFFFFF"/>
+  <path d="M46 84H82" stroke="#1F6F50" stroke-width="5" stroke-linecap="round"/>
+  <path d="M46 96H72" stroke="#9BC9B1" stroke-width="5" stroke-linecap="round"/>
+  <path d="M37 53V42C37 40.3431 38.3431 39 40 39H88C89.6569 39 91 40.3431 91 42V53" stroke="#1F6F50" stroke-width="6" stroke-linecap="round"/>
+  <path d="M35 53H93C100.18 53 106 58.8203 106 66V88C106 92.4183 102.418 96 98 96H89V74H39V96H30C25.5817 96 22 92.4183 22 88V66C22 58.8203 27.8203 53 35 53Z" stroke="#184D39" stroke-width="6" stroke-linejoin="round"/>
+  <path d="M91 68H96" stroke="#184D39" stroke-width="6" stroke-linecap="round"/>
+  <path d="M64 16L70.447 27.1635H57.553L64 16Z" fill="#B9E5CC"/>
+  <defs>
+    <linearGradient id="bg" x1="18" y1="13" x2="112" y2="118" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1F6F50"/>
+      <stop offset="1" stop-color="#103D2B"/>
+    </linearGradient>
+  </defs>
+</svg>

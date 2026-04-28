@@ -1,6 +1,6 @@
 :root {
   color: #18201b;
-  background: #f4f6f1;
+  background: #eef4ef;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
@@ -10,6 +10,10 @@
 
 body {
   margin: 0;
+  min-width: 320px;
+  background:
+    radial-gradient(circle at top left, rgba(31, 111, 80, 0.16), transparent 34rem),
+    linear-gradient(135deg, #f7faf6 0%, #edf4ee 45%, #e5eee7 100%);
 }
 
 button,
@@ -21,7 +25,7 @@ textarea {
 
 button {
   border: 0;
-  border-radius: 7px;
+  border-radius: 10px;
   background: #1f6f50;
   color: white;
   font-weight: 800;
@@ -31,6 +35,33 @@ button {
   justify-content: center;
   gap: 8px;
   cursor: pointer;
+  min-height: 42px;
+  box-shadow: 0 8px 18px rgba(31, 111, 80, 0.18);
+  transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease;
+}
+
+button:hover:not(:disabled) {
+  background: #18593f;
+  box-shadow: 0 10px 22px rgba(31, 111, 80, 0.24);
+  transform: translateY(-1px);
+}
+
+button.secondary,
+button.ghost {
+  border: 1px solid #cfd8cc;
+  background: #f7faf6;
+  color: #1f6f50;
+  box-shadow: none;
+}
+
+button.secondary:hover:not(:disabled),
+button.ghost:hover:not(:disabled) {
+  background: #edf6f0;
+  box-shadow: none;
+}
+
+button.danger {
+  color: #8a1f1f;
 }
 
 button:disabled {
@@ -43,11 +74,20 @@ select,
 textarea {
   width: 100%;
   border: 1px solid #cfd8cc;
-  border-radius: 7px;
+  border-radius: 10px;
   background: white;
   color: #18201b;
   padding: 10px 11px;
   min-height: 42px;
+  outline: none;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: #1f6f50;
+  box-shadow: 0 0 0 3px rgba(31, 111, 80, 0.12);
 }
 
 textarea {
@@ -57,7 +97,7 @@ textarea {
 
 label {
   display: block;
-  margin: 12px 0 6px;
+  margin: 14px 0 7px;
   color: #5b675d;
   font-size: 12px;
   font-weight: 800;
@@ -66,15 +106,46 @@ label {
 
 .app-shell {
   min-height: 100vh;
-  padding: 28px;
+  padding: 30px;
+  max-width: 1240px;
+  margin: 0 auto;
 }
 
 .topbar {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 18px;
-  margin-bottom: 20px;
+  margin-bottom: 22px;
+  border: 1px solid rgba(207, 216, 204, 0.8);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.82);
+  padding: 18px;
+  box-shadow: 0 18px 44px rgba(26, 59, 41, 0.08);
+  backdrop-filter: blur(10px);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+
+.brand-logo {
+  width: 68px;
+  height: 68px;
+  flex: 0 0 auto;
+  border-radius: 18px;
+  box-shadow: 0 12px 24px rgba(16, 61, 43, 0.22);
+}
+
+.topbar-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .eyebrow {
@@ -87,33 +158,56 @@ label {
 
 h1 {
   margin: 0;
-  font-size: 28px;
+  color: #132219;
+  font-size: clamp(24px, 3vw, 34px);
   line-height: 1.1;
+}
+
+.subtitle {
+  margin: 8px 0 0;
+  color: #657064;
+  font-size: 14px;
 }
 
 h2 {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 0 0 10px;
-  font-size: 17px;
+  margin: 0 0 8px;
+  color: #132219;
+  font-size: 18px;
 }
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 18px;
 }
 
 .panel {
   border: 1px solid #dce3d8;
-  border-radius: 8px;
-  background: #ffffff;
-  padding: 18px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.92);
+  padding: 20px;
+  box-shadow: 0 12px 30px rgba(26, 59, 41, 0.07);
+}
+
+.onboarding-panel,
+.scale-panel,
+.printer-panel,
+.service-panel {
+  grid-column: span 6;
 }
 
 .ai-panel {
   grid-column: 1 / -1;
+}
+
+.section-kicker {
+  margin: 0 0 12px;
+  color: #657064;
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .row,
@@ -121,10 +215,12 @@ h2 {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .row input {
   flex: 1;
+  min-width: 180px;
 }
 
 .spread {
@@ -133,26 +229,38 @@ h2 {
 
 .device-box {
   border: 1px solid #e4ebe0;
-  border-radius: 8px;
+  border-radius: 14px;
   background: #f9fbf8;
-  padding: 12px;
-  margin-bottom: 12px;
+  padding: 15px;
+  margin: 14px 0;
 }
 
 .add-device-button {
-  margin: 4px 0 14px;
+  margin: 0;
 }
 
 .split {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 12px;
+  gap: 14px;
+}
+
+.test-strip {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: end;
+  gap: 14px;
+  margin-top: 4px;
+}
+
+.test-input label {
+  margin-top: 0;
 }
 
 .pill {
   border: 1px solid #cfd8cc;
   border-radius: 999px;
-  background: white;
+  background: #ffffff;
   color: #5b675d;
   padding: 8px 12px;
   display: inline-flex;
@@ -161,6 +269,16 @@ h2 {
   font-size: 13px;
   font-weight: 900;
   white-space: nowrap;
+}
+
+.version-badge {
+  border: 1px solid #dce3d8;
+  border-radius: 999px;
+  background: #f7faf6;
+  color: #657064;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 900;
 }
 
 .pill.online {
@@ -187,18 +305,22 @@ h2 {
 }
 
 .reading {
-  margin: 14px 0 0;
+  margin: 16px 0 0;
+  border: 1px solid #d6eadf;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #eaf8f0, #ffffff);
   color: #1f6f50;
   font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
   font-size: 32px;
   font-weight: 900;
+  padding: 14px 16px;
 }
 
 pre {
   margin: 14px 0 0;
   min-height: 96px;
   overflow: auto;
-  border-radius: 7px;
+  border-radius: 14px;
   background: #172018;
   color: #cdeed8;
   padding: 12px;
@@ -230,13 +352,43 @@ pre {
     padding: 16px;
   }
 
+  .topbar {
+    align-items: flex-start;
+  }
+
   .topbar,
-  .grid,
   .split {
     grid-template-columns: 1fr;
   }
 
-  .topbar {
+  .topbar,
+  .brand,
+  .topbar-status,
+  .test-strip {
     display: grid;
+    justify-items: stretch;
+  }
+
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .onboarding-panel,
+  .scale-panel,
+  .printer-panel,
+  .service-panel,
+  .ai-panel {
+    grid-column: auto;
+  }
+
+  .brand-logo {
+    width: 58px;
+    height: 58px;
+  }
+
+  .actions button,
+  .row button,
+  .test-strip button {
+    width: 100%;
   }
 }

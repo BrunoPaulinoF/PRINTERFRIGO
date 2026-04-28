@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { Bot, CheckCircle2, KeyRound, PlugZap, Printer, RefreshCw, Save, Scale, ShieldCheck, WifiOff, Wrench } from "lucide-react";
+import logoUrl from "./assets/printerfrigo-logo.svg";
 import {
   adminLogin,
   aiCollectSnapshot,
@@ -22,7 +23,7 @@ import {
 } from "./api";
 import type { AiProposedAction, PortInfo, PrinterConfig, PrinterInfo, ScaleConfig, StationConfig } from "./types";
 
-const VERSION = "0.2.9";
+const VERSION = "0.2.10";
 const DEFAULT_SERVER_URL = "https://kyberfrigo.kybernan.com.br";
 const ACTIVE_SERVICE_POLL_MS = 2000;
 const IDLE_SERVICE_POLL_MS = 300000;
@@ -812,23 +813,37 @@ export function App() {
   return (
     <main className="app-shell">
       <section className="topbar">
-        <div>
-          <p className="eyebrow">PRINTERFRIGO</p>
-          <h1>Estacao de pesagem e etiquetas</h1>
+        <div className="brand">
+          <img className="brand-logo" src={logoUrl} alt="PRINTERFRIGO" />
+          <div>
+            <p className="eyebrow">PRINTERFRIGO</p>
+            <h1>Estacao de pesagem e etiquetas</h1>
+            <p className="subtitle">Agente local para balancas, impressoras e integracao KyberFrigo.</p>
+          </div>
         </div>
-        <div className={isEnrolled ? "pill online" : "pill"}>
-          {isEnrolled ? <CheckCircle2 size={16} /> : <WifiOff size={16} />}
-          {isEnrolled ? "Matriculado" : "Nao matriculado"}
+        <div className="topbar-status">
+          <div className={isEnrolled ? "pill online" : "pill"}>
+            {isEnrolled ? <CheckCircle2 size={16} /> : <WifiOff size={16} />}
+            {isEnrolled ? "Matriculado" : "Nao matriculado"}
+          </div>
+          <span className="version-badge">v{VERSION}</span>
         </div>
       </section>
 
       <section className="grid">
-        <div className="panel">
+        <div className="panel onboarding-panel">
           <h2><ShieldCheck size={18} /> Onboarding</h2>
-          <label>URL KyberFrigo</label>
-          <input value={config.serverUrl} onChange={(e) => setConfig({ ...config, serverUrl: e.target.value })} />
-          <label>Nome da estacao</label>
-          <input value={config.stationLabel} onChange={(e) => setConfig({ ...config, stationLabel: e.target.value })} />
+          <p className="section-kicker">Vincule esta estacao ao KyberFrigo e mantenha o nome local organizado.</p>
+          <div className="split">
+            <div>
+              <label>URL KyberFrigo</label>
+              <input value={config.serverUrl} onChange={(e) => setConfig({ ...config, serverUrl: e.target.value })} />
+            </div>
+            <div>
+              <label>Nome da estacao</label>
+              <input value={config.stationLabel} onChange={(e) => setConfig({ ...config, stationLabel: e.target.value })} />
+            </div>
+          </div>
           <label>Codigo de matricula</label>
           <div className="row">
             <input value={enrollCode} onChange={(e) => setEnrollCode(e.target.value.toUpperCase())} placeholder="ABC12345" />
@@ -837,13 +852,14 @@ export function App() {
           <p className="muted">Tenant: {config.tenantId ?? "nao vinculado"}</p>
         </div>
 
-        <div className="panel">
+        <div className="panel scale-panel">
           <h2><Scale size={18} /> Balanca</h2>
+          <p className="section-kicker">Configure porta, leitura minima e parser sem alterar o fluxo de captura.</p>
           {scales.map((scale, index) => (
             <div className="device-box" key={`${scale.port}-${index}`}>
               <div className="row spread">
                 <strong>{scaleLabel(scale, index)}</strong>
-                {scales.length > 1 && <button onClick={() => removeScale(index)} disabled={isBusy}>Remover</button>}
+                {scales.length > 1 && <button className="ghost danger" onClick={() => removeScale(index)} disabled={isBusy}>Remover</button>}
               </div>
               <label>Modo</label>
               <select value={scale.mode ?? "serial"} onChange={(e) => updateScaleAt(index, {
@@ -877,23 +893,27 @@ export function App() {
               <input value={scale.parserRegex} onChange={(e) => updateScaleAt(index, { parserRegex: e.target.value })} />
             </div>
           ))}
-          <button className="add-device-button" onClick={addScale} disabled={isBusy}>Adicionar balanca</button>
-          <label>Frame de teste</label>
-          <div className="row">
-            <input value={scaleFrame} onChange={(e) => setScaleFrame(e.target.value)} />
-            <button onClick={testParser}>Testar</button>
+          <div className="test-strip">
+            <button className="add-device-button secondary" onClick={addScale} disabled={isBusy}>Adicionar balanca</button>
+            <div className="test-input">
+              <label>Frame de teste</label>
+              <div className="row">
+                <input value={scaleFrame} onChange={(e) => setScaleFrame(e.target.value)} />
+                <button onClick={testParser}>Testar</button>
+              </div>
+            </div>
           </div>
           <p className="reading">{lastWeight === null ? "--" : `${lastWeight.toFixed(3)} kg`}</p>
         </div>
 
-        <div className="panel">
+        <div className="panel printer-panel">
           <h2><Printer size={18} /> Impressora</h2>
           <p className="muted">Caminho recomendado: instale a Zebra/Elgin no Windows, clique em Atualizar, use a impressora padrao e imprima uma etiqueta de teste.</p>
           {printersConfig.map((printer, index) => (
             <div className="device-box" key={`${printer.localId}-${index}`}>
               <div className="row spread">
                 <strong>{printerLabel(printer, index)}</strong>
-                {printersConfig.length > 1 && <button onClick={() => removePrinter(index)} disabled={isBusy}>Remover</button>}
+                {printersConfig.length > 1 && <button className="ghost danger" onClick={() => removePrinter(index)} disabled={isBusy}>Remover</button>}
               </div>
               <label>Modo</label>
               <select value={printer.mode} onChange={(e) => updatePrinterAt(index, { mode: e.target.value as StationConfig["printer"]["mode"] })}>
@@ -910,7 +930,7 @@ export function App() {
                   </select>
                   <p className="tip">Este nome precisa bater com a fila instalada no Windows. O PRINTERFRIGO envia ZPL RAW direto para essa fila.</p>
                   <div className="row action-row">
-                    <button onClick={() => useDefaultPrinter(index)} disabled={isBusy || !defaultPrinter}>Usar impressora padrao</button>
+                    <button className="secondary" onClick={() => useDefaultPrinter(index)} disabled={isBusy || !defaultPrinter}>Usar impressora padrao</button>
                     <button onClick={() => testPrinterAt(index)} disabled={isBusy || !printer.queueName}>Imprimir etiqueta teste</button>
                   </div>
                 </>
@@ -931,19 +951,19 @@ export function App() {
               )}
             </div>
           ))}
-          <button className="add-device-button" onClick={addPrinter} disabled={isBusy}>Adicionar impressora</button>
+          <button className="add-device-button secondary" onClick={addPrinter} disabled={isBusy}>Adicionar impressora</button>
           <div className="row">
-            <button onClick={refreshDevices}><RefreshCw size={15} /> Atualizar</button>
+            <button className="secondary" onClick={refreshDevices}><RefreshCw size={15} /> Atualizar dispositivos</button>
           </div>
         </div>
 
-        <div className="panel">
+        <div className="panel service-panel">
           <h2><PlugZap size={18} /> Servico</h2>
           <p className="muted">Versao {VERSION}. O update Tauri fica bloqueado operacionalmente enquanto houver sessao ativa no KyberFrigo.</p>
           <div className="actions">
             <button onClick={() => persist()} disabled={isBusy}><Save size={15} /> Salvar</button>
-            <button onClick={heartbeat} disabled={!isEnrolled || isBusy}>Heartbeat</button>
-            <button onClick={syncReceivingConfig} disabled={!isEnrolled || isBusy}>Sincronizar Receiving</button>
+            <button className="secondary" onClick={heartbeat} disabled={!isEnrolled || isBusy}>Heartbeat</button>
+            <button className="secondary" onClick={syncReceivingConfig} disabled={!isEnrolled || isBusy}>Sincronizar Receiving</button>
           </div>
           <p className="tip">Use depois de escolher impressora/balanca. Isto vincula a estacao ao ponto Receiving no KyberFrigo.</p>
           <pre>{status}</pre>
@@ -977,7 +997,7 @@ export function App() {
                 <button onClick={askAi} disabled={aiBusy || !aiInput.trim()}>
                   <Bot size={15} /> Diagnosticar
                 </button>
-                <button onClick={() => setAdminToken(null)} disabled={aiBusy}>Bloquear</button>
+                <button className="secondary" onClick={() => setAdminToken(null)} disabled={aiBusy}>Bloquear</button>
               </div>
               {aiError && <pre className="ai-error">{aiError}</pre>}
               {aiReply && <pre className="ai-reply">{aiReply}</pre>}

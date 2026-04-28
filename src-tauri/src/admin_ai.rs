@@ -10,6 +10,12 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 const ADMIN_SALT: &str = "printerfrigo-admin-v1";
 const ADMIN_PASSWORD_HASH: &str = "6929d63bd54615f546a7fb869707784d88e21be5990a45558bbc80eb471e7455";
 const MAX_ATTEMPTS: u8 = 5;
@@ -246,9 +252,15 @@ fn now_ms() -> u64 {
 fn powershell_json(script: &str) -> Value {
     #[cfg(target_os = "windows")]
     {
-        let output = Command::new("powershell")
-            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script])
-            .output();
+        let mut command = Command::new("powershell");
+        command.creation_flags(CREATE_NO_WINDOW).args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ]);
+        let output = command.output();
         match output {
             Ok(output) if output.status.success() => {
                 let stdout = String::from_utf8_lossy(&output.stdout);
@@ -269,16 +281,17 @@ fn powershell_json(script: &str) -> Value {
 fn restart_print_spooler() -> Result<LocalToolResult, String> {
     #[cfg(target_os = "windows")]
     {
-        let output = Command::new("powershell")
+        let mut command = Command::new("powershell");
+        command
+            .creation_flags(CREATE_NO_WINDOW)
             .args([
                 "-NoProfile",
                 "-ExecutionPolicy",
                 "Bypass",
                 "-Command",
                 "Restart-Service -Name Spooler -Force; Get-Service Spooler | Select-Object Name,Status | ConvertTo-Json",
-            ])
-            .output()
-            .map_err(|err| err.to_string())?;
+            ]);
+        let output = command.output().map_err(|err| err.to_string())?;
         if !output.status.success() {
             return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
         }
@@ -295,7 +308,9 @@ fn restart_print_spooler() -> Result<LocalToolResult, String> {
 fn clear_print_queue(queue_name: String) -> Result<LocalToolResult, String> {
     #[cfg(target_os = "windows")]
     {
-        let output = Command::new("powershell")
+        let mut command = Command::new("powershell");
+        command
+            .creation_flags(CREATE_NO_WINDOW)
             .args([
                 "-NoProfile",
                 "-ExecutionPolicy",
@@ -303,9 +318,8 @@ fn clear_print_queue(queue_name: String) -> Result<LocalToolResult, String> {
                 "-Command",
                 "param($Queue) Get-PrintJob -PrinterName $Queue -ErrorAction SilentlyContinue | Remove-PrintJob",
                 &queue_name,
-            ])
-            .output()
-            .map_err(|err| err.to_string())?;
+            ]);
+        let output = command.output().map_err(|err| err.to_string())?;
         if !output.status.success() {
             return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
         }
