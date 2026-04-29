@@ -347,6 +347,155 @@ pre {
   margin-top: 12px;
 }
 
+.lock-shell {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.lock-card {
+  width: 100%;
+  max-width: 460px;
+  border: 1px solid #dce3d8;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.96);
+  padding: 32px 28px 24px;
+  box-shadow: 0 24px 60px rgba(26, 59, 41, 0.14);
+  text-align: center;
+}
+
+.lock-logo {
+  width: 84px;
+  height: 84px;
+  border-radius: 22px;
+  box-shadow: 0 14px 28px rgba(16, 61, 43, 0.22);
+  margin-bottom: 14px;
+}
+
+.lock-card h1 {
+  margin: 6px 0 8px;
+  font-size: 28px;
+  letter-spacing: 0.4px;
+}
+
+.lock-sub {
+  margin: 0 0 22px;
+  color: #5b675d;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.lock-form {
+  text-align: left;
+  margin-bottom: 22px;
+}
+
+.lock-form label {
+  margin-top: 0;
+}
+
+.lock-error {
+  margin: 8px 0 0;
+  color: #8a1f1f;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.lock-divider {
+  position: relative;
+  margin: 8px 0 14px;
+  text-align: center;
+  color: #8a978c;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.lock-divider::before,
+.lock-divider::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 32%;
+  height: 1px;
+  background: #dce3d8;
+}
+
+.lock-divider::before {
+  left: 0;
+}
+
+.lock-divider::after {
+  right: 0;
+}
+
+.lock-divider span {
+  background: #ffffff;
+  padding: 0 10px;
+}
+
+.lock-hint {
+  margin: 0 0 14px;
+  color: #5b675d;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.reset-button {
+  width: 100%;
+  background: #c43d2a;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 900;
+  padding: 14px 16px;
+  border-radius: 14px;
+  box-shadow: 0 14px 28px rgba(196, 61, 42, 0.28);
+}
+
+.reset-button:hover:not(:disabled) {
+  background: #a83423;
+  box-shadow: 0 16px 32px rgba(196, 61, 42, 0.32);
+}
+
+.reset-button.compact {
+  width: auto;
+  padding: 8px 14px;
+  font-size: 13px;
+  min-height: 38px;
+  border-radius: 999px;
+  box-shadow: 0 8px 18px rgba(196, 61, 42, 0.22);
+}
+
+.lock-button {
+  padding: 8px 12px;
+  min-height: 38px;
+  border-radius: 999px;
+  font-size: 13px;
+}
+
+.lock-reset-msg {
+  margin: 12px 0 0;
+  color: #1f3327;
+  background: #eaf2ec;
+  border: 1px solid #c8dccd;
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: left;
+}
+
+.lock-version {
+  margin: 22px 0 0;
+  color: #8a978c;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
 @media (max-width: 820px) {
   .app-shell {
     padding: 16px;

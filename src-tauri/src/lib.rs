@@ -116,6 +116,7 @@ pub fn run() {
             hardware::test_scale_parse,
             printing::list_printers,
             printing::test_print_zpl,
+            printing::quick_reset_printers,
         ])
         .run(tauri::generate_context!())
         .expect("erro ao executar PRINTERFRIGO");

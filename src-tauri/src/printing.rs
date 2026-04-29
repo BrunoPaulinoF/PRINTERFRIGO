@@ -50,6 +50,42 @@ pub fn test_print_zpl(printer: PrinterConfig, zpl: String) -> Result<String, Str
     print_zpl(&printer, &zpl)
 }
 
+#[tauri::command]
+pub fn quick_reset_printers() -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let script = "$ErrorActionPreference='SilentlyContinue'; \
+            $removed = 0; \
+            try { Stop-Service -Name Spooler -Force } catch {}; \
+            try { Get-ChildItem -Path 'C:\\Windows\\System32\\spool\\PRINTERS\\*' -Force | ForEach-Object { Remove-Item $_.FullName -Force; $removed++ } } catch {}; \
+            try { Start-Service -Name Spooler } catch {}; \
+            try { Get-Printer | ForEach-Object { Get-PrintJob -PrinterName $_.Name -ErrorAction SilentlyContinue | Remove-PrintJob -ErrorAction SilentlyContinue } } catch {}; \
+            \"OK $removed\"";
+        let mut command = Command::new("powershell");
+        command
+            .creation_flags(CREATE_NO_WINDOW)
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script]);
+        let output = command.output().map_err(|err| err.to_string())?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(format!(
+                "Falha ao resetar impressora. Pode ser necessario abrir o app como administrador. {stderr}"
+            ));
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let removed = stdout
+            .strip_prefix("OK ")
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(0);
+        Ok(format!(
+            "Impressora resetada. Spooler reiniciado e {removed} job(s) removido(s) da fila."
+        ))
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    Err("Reset de impressora disponivel apenas no Windows.".to_string())
+}
+
 pub fn print_zpl(printer: &PrinterConfig, zpl: &str) -> Result<String, String> {
     match printer.mode.as_str() {
         "dry_run" => write_dry_run(printer, zpl),

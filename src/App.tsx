@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
-import { Bot, CheckCircle2, KeyRound, PlugZap, Printer, RefreshCw, Save, Scale, ShieldCheck, WifiOff, Wrench } from "lucide-react";
+import { Bot, CheckCircle2, KeyRound, Lock, PlugZap, Printer, RefreshCw, Save, Scale, ShieldCheck, Unlock, WifiOff, Wrench, Zap } from "lucide-react";
 import logoUrl from "./assets/printerfrigo-logo.svg";
 import {
   adminLogin,
@@ -14,6 +14,7 @@ import {
   listPrinters,
   listSerialPorts,
   loadConfig,
+  quickResetPrinters,
   readScaleOnce,
   reportPrintJob as reportPrintJobApi,
   saveConfig,
@@ -23,7 +24,17 @@ import {
 } from "./api";
 import type { AiProposedAction, PortInfo, PrinterConfig, PrinterInfo, ScaleConfig, StationConfig } from "./types";
 
-const VERSION = "0.2.10";
+const VERSION = "0.2.11";
+const STATION_PASSWORD_HASH = "412b800684ad737f0b892151ccfd8b45578a413d2607c8ff0a134aeeeffbf186";
+const STATION_PASSWORD_SALT = "printerfrigo-station-v1";
+
+async function hashStationPassword(password: string) {
+  const data = new TextEncoder().encode(`${STATION_PASSWORD_SALT}:${password.trim()}`);
+  const buffer = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(buffer))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
 const DEFAULT_SERVER_URL = "https://kyberfrigo.kybernan.com.br";
 const ACTIVE_SERVICE_POLL_MS = 2000;
 const IDLE_SERVICE_POLL_MS = 300000;
@@ -192,6 +203,11 @@ export function App() {
   const [aiError, setAiError] = useState("");
   const [aiActions, setAiActions] = useState<AiProposedAction[]>([]);
   const [aiBusy, setAiBusy] = useState(false);
+  const [stationUnlocked, setStationUnlocked] = useState(false);
+  const [stationPassword, setStationPassword] = useState("");
+  const [stationError, setStationError] = useState("");
+  const [resetBusy, setResetBusy] = useState(false);
+  const [resetMessage, setResetMessage] = useState("");
   const handledCommands = useRef(new Set<string>());
   const processingCommands = useRef(new Set<string>());
   const handledJobs = useRef(new Set<string>());
@@ -810,6 +826,93 @@ export function App() {
     }
   }
 
+  async function unlockStation() {
+    if (!stationPassword.trim()) {
+      setStationError("Digite a senha.");
+      return;
+    }
+    try {
+      const hash = await hashStationPassword(stationPassword);
+      if (hash !== STATION_PASSWORD_HASH) {
+        setStationError("Senha incorreta.");
+        return;
+      }
+      setStationUnlocked(true);
+      setStationPassword("");
+      setStationError("");
+    } catch (error) {
+      setStationError(error instanceof Error ? error.message : "Falha ao validar senha.");
+    }
+  }
+
+  function lockStation() {
+    setStationUnlocked(false);
+    setStationPassword("");
+    setStationError("");
+    setAdminToken(null);
+    setResetMessage("");
+  }
+
+  async function resetPrinter() {
+    setResetBusy(true);
+    setResetMessage("Resetando impressora...");
+    try {
+      const message = await quickResetPrinters();
+      setResetMessage(message);
+      if (stationUnlocked) setStatus(message);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Falha ao resetar impressora.";
+      setResetMessage(message);
+      if (stationUnlocked) setStatus(message);
+    } finally {
+      setResetBusy(false);
+    }
+  }
+
+  if (!stationUnlocked) {
+    return (
+      <main className="lock-shell">
+        <div className="lock-card">
+          <img className="lock-logo" src={logoUrl} alt="PRINTERFRIGO" />
+          <h1>PRINTERFRIGO</h1>
+          <p className="lock-sub">Estacao bloqueada. Informe a senha para liberar configuracao e diagnostico.</p>
+
+          <div className="lock-form">
+            <label>Senha da estacao</label>
+            <div className="row">
+              <input
+                type="password"
+                value={stationPassword}
+                placeholder="Digite a senha"
+                onChange={(e) => {
+                  setStationPassword(e.target.value);
+                  if (stationError) setStationError("");
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void unlockStation();
+                }}
+                autoFocus
+              />
+              <button onClick={unlockStation} disabled={!stationPassword.trim()}>
+                <Unlock size={15} /> Entrar
+              </button>
+            </div>
+            {stationError && <p className="lock-error">{stationError}</p>}
+          </div>
+
+          <div className="lock-divider"><span>Impressora travou?</span></div>
+          <p className="lock-hint">Use o reset rapido sem precisar fazer login. Limpa todos os documentos parados na fila e reinicia o servico de impressao do Windows.</p>
+          <button className="reset-button" onClick={resetPrinter} disabled={resetBusy}>
+            <Zap size={16} /> {resetBusy ? "Resetando impressora..." : "Resetar impressora agora"}
+          </button>
+          {resetMessage && <p className="lock-reset-msg">{resetMessage}</p>}
+
+          <p className="lock-version">v{VERSION}</p>
+        </div>
+      </main>
+    );
+  }
+
   return (
     <main className="app-shell">
       <section className="topbar">
@@ -822,11 +925,17 @@ export function App() {
           </div>
         </div>
         <div className="topbar-status">
+          <button className="reset-button compact" onClick={resetPrinter} disabled={resetBusy}>
+            <Zap size={15} /> {resetBusy ? "Resetando..." : "Resetar impressora"}
+          </button>
           <div className={isEnrolled ? "pill online" : "pill"}>
             {isEnrolled ? <CheckCircle2 size={16} /> : <WifiOff size={16} />}
             {isEnrolled ? "Matriculado" : "Nao matriculado"}
           </div>
           <span className="version-badge">v{VERSION}</span>
+          <button className="ghost lock-button" onClick={lockStation} title="Bloquear estacao">
+            <Lock size={15} /> Bloquear
+          </button>
         </div>
       </section>
 

@@ -44,6 +44,10 @@ export function testPrintZpl(printer: PrinterConfig, zpl: string): Promise<strin
   return invoke("test_print_zpl", { printer, zpl });
 }
 
+export function quickResetPrinters(): Promise<string> {
+  return invoke("quick_reset_printers");
+}
+
 export function heartbeatOnce(config: StationConfig): Promise<unknown> {
   return invoke("heartbeat_once", { config });
 }
