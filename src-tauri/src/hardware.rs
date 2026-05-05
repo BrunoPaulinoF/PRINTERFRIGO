@@ -2,7 +2,7 @@ use crate::config::{save_config, ScaleConfig, StationConfig};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use serialport::SerialPortType;
+use serialport::{SerialPort, SerialPortType};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
@@ -116,12 +116,9 @@ pub fn read_scale_once(config: ScaleConfig) -> Result<f64, String> {
             .map_err(|err| err.to_string())?;
         
         if let Some(command) = config.read_command.as_ref().filter(|value| !value.is_empty()) {
-            let bytes = if command.ends_with('\n') {
-                command.as_bytes().to_vec()
-            } else {
-                format!("{}\r\n", command).into_bytes()
-            };
-            stream.write_all(&bytes).map_err(|err| err.to_string())?;
+            stream.write_all(&command_bytes(command)).map_err(|err| err.to_string())?;
+            stream.flush().map_err(|err| err.to_string())?;
+            std::thread::sleep(Duration::from_millis(250));
         }
         
         let mut buffer = vec![0_u8; 256];
@@ -153,13 +150,11 @@ pub fn read_scale_once(config: ScaleConfig) -> Result<f64, String> {
     });
 
     let mut port = builder.open().map_err(|err| err.to_string())?;
+    prepare_serial_port(port.as_mut())?;
     if let Some(command) = config.read_command.as_ref().filter(|value| !value.is_empty()) {
-        let bytes = if command.ends_with('\n') {
-            command.as_bytes().to_vec()
-        } else {
-            format!("{}\r\n", command).into_bytes()
-        };
-        port.write_all(&bytes).map_err(|err| err.to_string())?;
+        port.write_all(&command_bytes(command)).map_err(|err| err.to_string())?;
+        port.flush().map_err(|err| err.to_string())?;
+        std::thread::sleep(Duration::from_millis(250));
     }
     let mut buffer = vec![0_u8; 256];
     let read = port.read(buffer.as_mut_slice()).map_err(|err| err.to_string())?;
@@ -184,12 +179,9 @@ pub fn read_scale_raw(config: ScaleConfig) -> Result<String, String> {
             .map_err(|err| err.to_string())?;
         
         if let Some(command) = config.read_command.as_ref().filter(|value| !value.is_empty()) {
-            let bytes = if command.ends_with('\n') {
-                command.as_bytes().to_vec()
-            } else {
-                format!("{}\r\n", command).into_bytes()
-            };
-            stream.write_all(&bytes).map_err(|err| err.to_string())?;
+            stream.write_all(&command_bytes(command)).map_err(|err| err.to_string())?;
+            stream.flush().map_err(|err| err.to_string())?;
+            std::thread::sleep(Duration::from_millis(250));
         }
         
         let bytes = collect_raw_bytes(&mut stream, Duration::from_millis(3500))?;
@@ -219,13 +211,11 @@ pub fn read_scale_raw(config: ScaleConfig) -> Result<String, String> {
     });
 
     let mut port = builder.open().map_err(|err| err.to_string())?;
+    prepare_serial_port(port.as_mut())?;
     if let Some(command) = config.read_command.as_ref().filter(|value| !value.is_empty()) {
-        let bytes = if command.ends_with('\n') {
-            command.as_bytes().to_vec()
-        } else {
-            format!("{}\r\n", command).into_bytes()
-        };
-        port.write_all(&bytes).map_err(|err| err.to_string())?;
+        port.write_all(&command_bytes(command)).map_err(|err| err.to_string())?;
+        port.flush().map_err(|err| err.to_string())?;
+        std::thread::sleep(Duration::from_millis(250));
     }
     let bytes = collect_raw_bytes(&mut port, Duration::from_millis(3500))?;
     Ok(format_raw_bytes(&bytes))
@@ -257,6 +247,23 @@ fn collect_raw_bytes<R: Read>(reader: &mut R, window: Duration) -> Result<Vec<u8
         }
     }
     Ok(output)
+}
+
+fn command_bytes(command: &str) -> Vec<u8> {
+    if command.ends_with('\n') {
+        command.as_bytes().to_vec()
+    } else {
+        format!("{}\r\n", command).into_bytes()
+    }
+}
+
+fn prepare_serial_port(port: &mut dyn SerialPort) -> Result<(), String> {
+    // Many RS-232 indicators require DTR/RTS asserted even when Windows shows flow control as "None".
+    let _ = port.clear(serialport::ClearBuffer::All);
+    let _ = port.write_data_terminal_ready(true);
+    let _ = port.write_request_to_send(true);
+    std::thread::sleep(Duration::from_millis(250));
+    Ok(())
 }
 
 fn format_raw_bytes(bytes: &[u8]) -> String {

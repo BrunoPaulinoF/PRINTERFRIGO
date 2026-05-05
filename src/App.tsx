@@ -25,7 +25,7 @@ import {
 } from "./api";
 import type { AiProposedAction, PortInfo, PrinterConfig, PrinterInfo, ScaleConfig, StationConfig } from "./types";
 
-const VERSION = "0.2.15";
+const VERSION = "0.2.16";
 const STATION_PASSWORD_HASH = "412b800684ad737f0b892151ccfd8b45578a413d2607c8ff0a134aeeeffbf186";
 const STATION_PASSWORD_SALT = "printerfrigo-station-v1";
 
@@ -830,7 +830,13 @@ export function App() {
     if (action.requiresConfirmation !== false && !window.confirm(`Executar: ${action.label}?`)) return;
     setAiBusy(true);
     try {
-      const args = action.args ?? {};
+      const args = { ...(action.args ?? {}) };
+      if (["read_scale_once", "read_scale_raw", "diagnose_scale_serial"].includes(action.tool) && !args.scale) {
+        args.scale = config.scale;
+      }
+      if (["test_print_zpl"].includes(action.tool) && !args.printer) {
+        args.printer = config.printer;
+      }
       if (action.tool === "save_station_config") {
         const next = args.config as StationConfig | undefined;
         if (!next) throw new Error("Acao sem config.");
@@ -853,6 +859,7 @@ export function App() {
       } else {
         const result = await aiRunLocalTool(adminToken, action.tool, args);
         setStatus(result.message);
+        setAiReply(`${result.message}\n\n${JSON.stringify(result.data, null, 2)}`);
       }
       await refreshDevices();
     } catch (error) {

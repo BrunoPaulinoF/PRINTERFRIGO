@@ -1,5 +1,5 @@
 use crate::config::{load_config, save_config, StationConfig};
-use crate::hardware::{list_serial_ports, read_scale_once, test_scale_parse};
+use crate::hardware::{list_serial_ports, read_scale_once, read_scale_raw, test_scale_parse};
 use crate::printing::{list_printers, test_print_zpl};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -204,6 +204,20 @@ pub fn ai_run_local_tool(
             .map_err(|err| err.to_string())?;
             read_scale_once(config).map(|weight| ok("Leitura de balanca concluida.".to_string(), json!({ "weightKg": weight })))
         }
+        "read_scale_raw" => {
+            let config: crate::config::ScaleConfig = serde_json::from_value(
+                request.args.get("scale").cloned().ok_or_else(|| "Campo scale ausente.".to_string())?,
+            )
+            .map_err(|err| err.to_string())?;
+            read_scale_raw(config).map(|frame| ok("Frame bruto da balanca lido.".to_string(), json!({ "frame": frame })))
+        }
+        "diagnose_scale_serial" => {
+            let config: crate::config::ScaleConfig = serde_json::from_value(
+                request.args.get("scale").cloned().ok_or_else(|| "Campo scale ausente.".to_string())?,
+            )
+            .map_err(|err| err.to_string())?;
+            diagnose_scale_serial(config)
+        }
         "test_scale_parse" => {
             let frame = required_string(&request.args, "frame")?;
             let parser_regex = required_string(&request.args, "parserRegex")?;
@@ -341,6 +355,62 @@ fn test_tcp_connection(host: String, port: u16) -> Result<LocalToolResult, Strin
         .ok_or_else(|| "Host TCP invalido.".to_string())?;
     TcpStream::connect_timeout(&addr, Duration::from_secs(3)).map_err(|err| err.to_string())?;
     Ok(ok(format!("Conexao TCP OK em {host}:{port}."), json!({ "host": host, "port": port })))
+}
+
+fn diagnose_scale_serial(config: crate::config::ScaleConfig) -> Result<LocalToolResult, String> {
+    if config.mode.as_deref() == Some("tcp") {
+        return Err("Diagnostico serial exige balanca em modo Serial real.".to_string());
+    }
+    if config.port.trim().is_empty() {
+        return Err("Porta serial ausente para diagnostico.".to_string());
+    }
+
+    let mut attempts = Vec::new();
+    let mut commands = vec![None, Some("SI"), Some("P"), Some("W"), Some("S")];
+    if let Some(command) = config.read_command.as_deref().filter(|value| !value.trim().is_empty()) {
+        commands.insert(0, Some(command));
+    }
+
+    let mut bauds = vec![config.baud_rate, 9600, 4800, 19200];
+    bauds.sort_unstable();
+    bauds.dedup();
+
+    for baud in bauds {
+        for command in &commands {
+            let mut next = config.clone();
+            next.baud_rate = baud;
+            next.read_command = command.map(str::to_string);
+            let label = command.unwrap_or("<sem comando>");
+            match read_scale_raw(next) {
+                Ok(frame) => {
+                    let got_data = !frame.starts_with("Nenhum dado recebido");
+                    attempts.push(json!({
+                        "baudRate": baud,
+                        "command": label,
+                        "gotData": got_data,
+                        "frame": frame,
+                    }));
+                    if got_data {
+                        return Ok(ok(
+                            format!("Balanca respondeu em {baud} baud com comando {label}."),
+                            json!({ "attempts": attempts }),
+                        ));
+                    }
+                }
+                Err(error) => attempts.push(json!({
+                    "baudRate": baud,
+                    "command": label,
+                    "gotData": false,
+                    "error": error,
+                })),
+            }
+        }
+    }
+
+    Ok(ok(
+        "Diagnostico concluido: nenhuma tentativa recebeu dados da balanca.".to_string(),
+        json!({ "attempts": attempts }),
+    ))
 }
 
 fn required_string(args: &Value, key: &str) -> Result<String, String> {
