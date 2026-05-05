@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell($bytes = [System.Text.Encoding]::UTF8.GetBytes\\(\"printerfrigo-station-v1:TESTE123\"\\); $sha = [System.Security.Cryptography.SHA256]::Create\\(\\); $hash = $sha.ComputeHash\\($bytes\\); [BitConverter]::ToString\\($hash\\).Replace\\(\"-\",\"\"\\).ToLower\\(\\))",
+      "Bash(cargo check *)",
+      "Bash(git tag *)",
+      "Bash(gh run *)",
+      "PowerShell(gh run *)"
+    ]
+  }
+}
