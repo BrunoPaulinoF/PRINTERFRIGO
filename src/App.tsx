@@ -24,7 +24,7 @@ import {
 } from "./api";
 import type { AiProposedAction, PortInfo, PrinterConfig, PrinterInfo, ScaleConfig, StationConfig } from "./types";
 
-const VERSION = "0.2.12";
+const VERSION = "0.2.13";
 const STATION_PASSWORD_HASH = "412b800684ad737f0b892151ccfd8b45578a413d2607c8ff0a134aeeeffbf186";
 const STATION_PASSWORD_SALT = "printerfrigo-station-v1";
 
@@ -1003,6 +1003,8 @@ export function App() {
                   <input value={scale.host ?? ""} onChange={(e) => updateScaleAt(index, { host: e.target.value })} placeholder="Ex: 192.168.0.100" />
                   <label>Porta TCP</label>
                   <input value={scale.port} onChange={(e) => updateScaleAt(index, { port: e.target.value })} placeholder="Ex: 4001" />
+                  <label>Comando de leitura</label>
+                  <input value={scale.readCommand ?? ""} onChange={(e) => updateScaleAt(index, { readCommand: e.target.value })} placeholder="Ex: SI (para Toledo 9091)" />
                 </>
               ) : (
                 <>
@@ -1011,6 +1013,8 @@ export function App() {
                     <option value="">Selecionar porta</option>
                     {ports.map((port) => <option key={port.name} value={port.name}>{port.name} - {port.kind}</option>)}
                   </select>
+                  <label>Comando de leitura (opcional)</label>
+                  <input value={scale.readCommand ?? ""} onChange={(e) => updateScaleAt(index, { readCommand: e.target.value })} placeholder="Ex: SI (para Toledo 9091)" />
                 </>
               )}
               <div className="split">

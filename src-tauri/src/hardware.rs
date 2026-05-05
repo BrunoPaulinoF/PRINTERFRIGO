@@ -116,7 +116,12 @@ pub fn read_scale_once(config: ScaleConfig) -> Result<f64, String> {
             .map_err(|err| err.to_string())?;
         
         if let Some(command) = config.read_command.as_ref().filter(|value| !value.is_empty()) {
-            stream.write_all(command.as_bytes()).map_err(|err| err.to_string())?;
+            let bytes = if command.ends_with('\n') {
+                command.as_bytes().to_vec()
+            } else {
+                format!("{}\r\n", command).into_bytes()
+            };
+            stream.write_all(&bytes).map_err(|err| err.to_string())?;
         }
         
         let mut buffer = vec![0_u8; 256];
@@ -149,7 +154,12 @@ pub fn read_scale_once(config: ScaleConfig) -> Result<f64, String> {
 
     let mut port = builder.open().map_err(|err| err.to_string())?;
     if let Some(command) = config.read_command.as_ref().filter(|value| !value.is_empty()) {
-        port.write_all(command.as_bytes()).map_err(|err| err.to_string())?;
+        let bytes = if command.ends_with('\n') {
+            command.as_bytes().to_vec()
+        } else {
+            format!("{}\r\n", command).into_bytes()
+        };
+        port.write_all(&bytes).map_err(|err| err.to_string())?;
     }
     let mut buffer = vec![0_u8; 256];
     let read = port.read(buffer.as_mut_slice()).map_err(|err| err.to_string())?;
