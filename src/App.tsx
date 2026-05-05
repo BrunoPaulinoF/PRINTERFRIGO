@@ -16,6 +16,7 @@ import {
   loadConfig,
   quickResetPrinters,
   readScaleOnce,
+  readScaleRaw,
   reportPrintJob as reportPrintJobApi,
   saveConfig,
   submitCapture as submitCaptureApi,
@@ -24,7 +25,7 @@ import {
 } from "./api";
 import type { AiProposedAction, PortInfo, PrinterConfig, PrinterInfo, ScaleConfig, StationConfig } from "./types";
 
-const VERSION = "0.2.13";
+const VERSION = "0.2.14";
 const STATION_PASSWORD_HASH = "412b800684ad737f0b892151ccfd8b45578a413d2607c8ff0a134aeeeffbf186";
 const STATION_PASSWORD_SALT = "printerfrigo-station-v1";
 
@@ -198,6 +199,7 @@ export function App() {
   const [enrollCode, setEnrollCode] = useState("");
   const [scaleFrame, setScaleFrame] = useState("ST,GS,+0012.345kg");
   const [lastWeight, setLastWeight] = useState<number | null>(null);
+  const [rawFrame, setRawFrame] = useState<string | null>(null);
   const [status, setStatus] = useState("Carregando configuracao local...");
   const [isBusy, setIsBusy] = useState(false);
   const [adminPassword, setAdminPassword] = useState("");
@@ -390,6 +392,28 @@ export function App() {
     } catch (error) {
       setLastWeight(null);
       setStatus(error instanceof Error ? error.message : "Nao foi possivel ler o peso.");
+    }
+  }
+
+  async function handleReadScale() {
+    setIsBusy(true);
+    setRawFrame(null);
+    setLastWeight(null);
+    try {
+      const frame = await readScaleRaw(config.scale);
+      setRawFrame(frame);
+      setStatus(`Frame recebido: ${frame}`);
+      try {
+        const weight = await testScaleParse(frame, config.scale.parserRegex);
+        setLastWeight(weight);
+      } catch {
+        setLastWeight(null);
+      }
+    } catch (error) {
+      setRawFrame(null);
+      setStatus(error instanceof Error ? error.message : "Erro ao ler balanca.");
+    } finally {
+      setIsBusy(false);
     }
   }
 
@@ -1027,14 +1051,14 @@ export function App() {
           ))}
           <div className="test-strip">
             <button className="add-device-button secondary" onClick={addScale} disabled={isBusy}>Adicionar balanca</button>
-            <div className="test-input">
-              <label>Frame de teste</label>
-              <div className="row">
-                <input value={scaleFrame} onChange={(e) => setScaleFrame(e.target.value)} />
-                <button onClick={testParser}>Testar</button>
-              </div>
-            </div>
+            <button onClick={handleReadScale} disabled={isBusy || !config.scale.port}>Ler Balanca</button>
           </div>
+          {rawFrame && (
+            <div className="raw-frame">
+              <label>Frame bruto recebido:</label>
+              <pre>{rawFrame}</pre>
+            </div>
+          )}
           <p className="reading">{lastWeight === null ? "--" : `${lastWeight.toFixed(3)} kg`}</p>
         </div>
 

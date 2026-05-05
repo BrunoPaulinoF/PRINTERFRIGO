@@ -40,6 +40,10 @@ export function readScaleOnce(config: StationConfig["scale"]): Promise<number> {
   return invoke("read_scale_once", { config });
 }
 
+export function readScaleRaw(config: StationConfig["scale"]): Promise<string> {
+  return invoke("read_scale_raw", { config });
+}
+
 export function testPrintZpl(printer: PrinterConfig, zpl: string): Promise<string> {
   return invoke("test_print_zpl", { printer, zpl });
 }

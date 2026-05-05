@@ -167,6 +167,74 @@ pub fn read_scale_once(config: ScaleConfig) -> Result<f64, String> {
     parse_weight_frame(&frame, &config.parser_regex)
 }
 
+#[tauri::command]
+pub fn read_scale_raw(config: ScaleConfig) -> Result<String, String> {
+    if config.mode.as_deref() == Some("simulated") {
+        return Ok(format!("SIMULATED: {} kg", config.simulated_weight_kg.unwrap_or(12.345)));
+    }
+
+    if config.mode.as_deref() == Some("tcp") {
+        let host = config.host.as_ref().filter(|h| !h.is_empty()).ok_or("Host TCP da balanca nao configurado.".to_string())?;
+        let port = if config.port.is_empty() { "4001".to_string() } else { config.port.clone() };
+        let port_num = port.parse::<u16>().map_err(|_| format!("Porta TCP invalida: {port}"))?;
+        
+        let mut stream = TcpStream::connect((host.as_str(), port_num))
+            .map_err(|err| format!("Falha ao conectar na balanca TCP {host}:{port_num}: {err}"))?;
+        stream.set_read_timeout(Some(Duration::from_millis(3000)))
+            .map_err(|err| err.to_string())?;
+        
+        if let Some(command) = config.read_command.as_ref().filter(|value| !value.is_empty()) {
+            let bytes = if command.ends_with('\n') {
+                command.as_bytes().to_vec()
+            } else {
+                format!("{}\r\n", command).into_bytes()
+            };
+            stream.write_all(&bytes).map_err(|err| err.to_string())?;
+        }
+        
+        let mut buffer = vec![0_u8; 512];
+        let read = stream.read(buffer.as_mut_slice()).map_err(|err| err.to_string())?;
+        let frame = String::from_utf8_lossy(&buffer[..read]);
+        return Ok(frame.to_string());
+    }
+
+    if config.port.trim().is_empty() {
+        return Err("Porta serial da balanca nao configurada.".to_string());
+    }
+
+    let mut builder = serialport::new(config.port.clone(), config.baud_rate).timeout(Duration::from_millis(3000));
+    builder = builder.data_bits(match config.data_bits {
+        5 => serialport::DataBits::Five,
+        6 => serialport::DataBits::Six,
+        7 => serialport::DataBits::Seven,
+        _ => serialport::DataBits::Eight,
+    });
+    builder = builder.stop_bits(if config.stop_bits == 2 {
+        serialport::StopBits::Two
+    } else {
+        serialport::StopBits::One
+    });
+    builder = builder.parity(match config.parity.as_str() {
+        "odd" => serialport::Parity::Odd,
+        "even" => serialport::Parity::Even,
+        _ => serialport::Parity::None,
+    });
+
+    let mut port = builder.open().map_err(|err| err.to_string())?;
+    if let Some(command) = config.read_command.as_ref().filter(|value| !value.is_empty()) {
+        let bytes = if command.ends_with('\n') {
+            command.as_bytes().to_vec()
+        } else {
+            format!("{}\r\n", command).into_bytes()
+        };
+        port.write_all(&bytes).map_err(|err| err.to_string())?;
+    }
+    let mut buffer = vec![0_u8; 512];
+    let read = port.read(buffer.as_mut_slice()).map_err(|err| err.to_string())?;
+    let frame = String::from_utf8_lossy(&buffer[..read]);
+    Ok(frame.to_string())
+}
+
 #[allow(dead_code)]
 pub fn build_scale_device(config: &ScaleConfig) -> serde_json::Value {
     let simulated = config.mode.as_deref() == Some("simulated");
