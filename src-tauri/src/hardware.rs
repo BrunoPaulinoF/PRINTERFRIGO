@@ -5,7 +5,7 @@ use serde_json::json;
 use serialport::SerialPortType;
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -180,7 +180,7 @@ pub fn read_scale_raw(config: ScaleConfig) -> Result<String, String> {
         
         let mut stream = TcpStream::connect((host.as_str(), port_num))
             .map_err(|err| format!("Falha ao conectar na balanca TCP {host}:{port_num}: {err}"))?;
-        stream.set_read_timeout(Some(Duration::from_millis(3000)))
+        stream.set_read_timeout(Some(Duration::from_millis(300)))
             .map_err(|err| err.to_string())?;
         
         if let Some(command) = config.read_command.as_ref().filter(|value| !value.is_empty()) {
@@ -192,17 +192,15 @@ pub fn read_scale_raw(config: ScaleConfig) -> Result<String, String> {
             stream.write_all(&bytes).map_err(|err| err.to_string())?;
         }
         
-        let mut buffer = vec![0_u8; 512];
-        let read = stream.read(buffer.as_mut_slice()).map_err(|err| err.to_string())?;
-        let frame = String::from_utf8_lossy(&buffer[..read]);
-        return Ok(frame.to_string());
+        let bytes = collect_raw_bytes(&mut stream, Duration::from_millis(3500))?;
+        return Ok(format_raw_bytes(&bytes));
     }
 
     if config.port.trim().is_empty() {
         return Err("Porta serial da balanca nao configurada.".to_string());
     }
 
-    let mut builder = serialport::new(config.port.clone(), config.baud_rate).timeout(Duration::from_millis(3000));
+    let mut builder = serialport::new(config.port.clone(), config.baud_rate).timeout(Duration::from_millis(300));
     builder = builder.data_bits(match config.data_bits {
         5 => serialport::DataBits::Five,
         6 => serialport::DataBits::Six,
@@ -229,10 +227,47 @@ pub fn read_scale_raw(config: ScaleConfig) -> Result<String, String> {
         };
         port.write_all(&bytes).map_err(|err| err.to_string())?;
     }
-    let mut buffer = vec![0_u8; 512];
-    let read = port.read(buffer.as_mut_slice()).map_err(|err| err.to_string())?;
-    let frame = String::from_utf8_lossy(&buffer[..read]);
-    Ok(frame.to_string())
+    let bytes = collect_raw_bytes(&mut port, Duration::from_millis(3500))?;
+    Ok(format_raw_bytes(&bytes))
+}
+
+fn collect_raw_bytes<R: Read>(reader: &mut R, window: Duration) -> Result<Vec<u8>, String> {
+    let deadline = Instant::now() + window;
+    let mut output = Vec::new();
+    while Instant::now() < deadline {
+        let mut buffer = [0_u8; 512];
+        match reader.read(&mut buffer) {
+            Ok(0) => {
+                if !output.is_empty() {
+                    break;
+                }
+            }
+            Ok(read) => {
+                output.extend_from_slice(&buffer[..read]);
+                if output.len() >= 512 {
+                    break;
+                }
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::TimedOut || err.kind() == std::io::ErrorKind::WouldBlock => {
+                if !output.is_empty() {
+                    break;
+                }
+            }
+            Err(err) => return Err(err.to_string()),
+        }
+    }
+    Ok(output)
+}
+
+fn format_raw_bytes(bytes: &[u8]) -> String {
+    if bytes.is_empty() {
+        return "Nenhum dado recebido em 3,5s. Se esta balanca funciona em outro sistema, ela provavelmente precisa de outro comando de leitura ou o outro sistema deixa a transmissao continua ativada.".to_string();
+    }
+    let text = String::from_utf8_lossy(bytes)
+        .replace('\r', "\\r")
+        .replace('\n', "\\n");
+    let hex = bytes.iter().map(|byte| format!("{byte:02X}")).collect::<Vec<_>>().join(" ");
+    format!("Texto: {text}\nHex: {hex}\nBytes: {}", bytes.len())
 }
 
 #[allow(dead_code)]

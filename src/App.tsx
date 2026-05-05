@@ -25,7 +25,7 @@ import {
 } from "./api";
 import type { AiProposedAction, PortInfo, PrinterConfig, PrinterInfo, ScaleConfig, StationConfig } from "./types";
 
-const VERSION = "0.2.14";
+const VERSION = "0.2.15";
 const STATION_PASSWORD_HASH = "412b800684ad737f0b892151ccfd8b45578a413d2607c8ff0a134aeeeffbf186";
 const STATION_PASSWORD_SALT = "printerfrigo-station-v1";
 
@@ -404,14 +404,17 @@ export function App() {
       setRawFrame(frame);
       setStatus(`Frame recebido: ${frame}`);
       try {
-        const weight = await testScaleParse(frame, config.scale.parserRegex);
-        setLastWeight(weight);
+        if (!frame.startsWith("Nenhum dado recebido")) {
+          const weight = await testScaleParse(frame, config.scale.parserRegex);
+          setLastWeight(weight);
+        }
       } catch {
         setLastWeight(null);
       }
     } catch (error) {
-      setRawFrame(null);
-      setStatus(error instanceof Error ? error.message : "Erro ao ler balanca.");
+      const message = error instanceof Error ? error.message : "Erro ao ler balanca.";
+      setRawFrame(message);
+      setStatus(message);
     } finally {
       setIsBusy(false);
     }
