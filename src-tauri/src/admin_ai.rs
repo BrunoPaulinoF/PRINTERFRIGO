@@ -17,7 +17,8 @@ use std::os::windows::process::CommandExt;
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 const ADMIN_SALT: &str = "printerfrigo-admin-v1";
-const ADMIN_PASSWORD_HASH: &str = "6929d63bd54615f546a7fb869707784d88e21be5990a45558bbc80eb471e7455";
+const ADMIN_PASSWORD_HASH: &str =
+    "6929d63bd54615f546a7fb869707784d88e21be5990a45558bbc80eb471e7455";
 const MAX_ATTEMPTS: u8 = 5;
 const LOCKOUT_MS: u64 = 60_000;
 const SESSION_MS: u64 = 15 * 60_000;
@@ -76,12 +77,20 @@ pub struct LocalToolResult {
 }
 
 #[tauri::command]
-pub fn admin_login(password: String, state: tauri::State<AdminState>) -> Result<AdminSession, String> {
-    let mut guard = state.inner.lock().map_err(|_| "Estado admin indisponivel.".to_string())?;
+pub fn admin_login(
+    password: String,
+    state: tauri::State<AdminState>,
+) -> Result<AdminSession, String> {
+    let mut guard = state
+        .inner
+        .lock()
+        .map_err(|_| "Estado admin indisponivel.".to_string())?;
     let now = now_ms();
     if guard.locked_until_ms > now {
         let remaining = ((guard.locked_until_ms - now) / 1000).max(1);
-        return Err(format!("Muitas tentativas. Tente novamente em {remaining}s."));
+        return Err(format!(
+            "Muitas tentativas. Tente novamente em {remaining}s."
+        ));
     }
 
     if hash_password(&password) != ADMIN_PASSWORD_HASH {
@@ -99,12 +108,18 @@ pub fn admin_login(password: String, state: tauri::State<AdminState>) -> Result<
     guard.locked_until_ms = 0;
     guard.session_token = Some(token.clone());
     guard.session_expires_at_ms = expires_at_ms;
-    Ok(AdminSession { token, expires_at_ms })
+    Ok(AdminSession {
+        token,
+        expires_at_ms,
+    })
 }
 
 #[tauri::command]
 pub fn admin_logout(token: String, state: tauri::State<AdminState>) -> Result<(), String> {
-    let mut guard = state.inner.lock().map_err(|_| "Estado admin indisponivel.".to_string())?;
+    let mut guard = state
+        .inner
+        .lock()
+        .map_err(|_| "Estado admin indisponivel.".to_string())?;
     if guard.session_token.as_deref() == Some(token.as_str()) {
         guard.session_token = None;
         guard.session_expires_at_ms = 0;
@@ -113,8 +128,14 @@ pub fn admin_logout(token: String, state: tauri::State<AdminState>) -> Result<()
 }
 
 #[tauri::command]
-pub fn admin_status(token: Option<String>, state: tauri::State<AdminState>) -> Result<AdminStatus, String> {
-    let guard = state.inner.lock().map_err(|_| "Estado admin indisponivel.".to_string())?;
+pub fn admin_status(
+    token: Option<String>,
+    state: tauri::State<AdminState>,
+) -> Result<AdminStatus, String> {
+    let guard = state
+        .inner
+        .lock()
+        .map_err(|_| "Estado admin indisponivel.".to_string())?;
     let authenticated = is_session_valid(&guard, token.as_deref());
     Ok(AdminStatus {
         authenticated,
@@ -135,7 +156,8 @@ pub fn ensure_windows_autostart() -> Result<String, String> {
         let (run, _) = hkcu
             .create_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Run")
             .map_err(|err| err.to_string())?;
-        run.set_value("PRINTERFRIGO", &command).map_err(|err| err.to_string())?;
+        run.set_value("PRINTERFRIGO", &command)
+            .map_err(|err| err.to_string())?;
         Ok("Inicializacao com Windows ativada.".to_string())
     }
 
@@ -186,7 +208,11 @@ pub fn ai_run_local_tool(
         ),
         "test_print_zpl" => {
             let config: crate::config::PrinterConfig = serde_json::from_value(
-                request.args.get("printer").cloned().ok_or_else(|| "Campo printer ausente.".to_string())?,
+                request
+                    .args
+                    .get("printer")
+                    .cloned()
+                    .ok_or_else(|| "Campo printer ausente.".to_string())?,
             )
             .map_err(|err| err.to_string())?;
             let zpl = request
@@ -199,21 +225,43 @@ pub fn ai_run_local_tool(
         }
         "read_scale_once" => {
             let config: crate::config::ScaleConfig = serde_json::from_value(
-                request.args.get("scale").cloned().ok_or_else(|| "Campo scale ausente.".to_string())?,
+                request
+                    .args
+                    .get("scale")
+                    .cloned()
+                    .ok_or_else(|| "Campo scale ausente.".to_string())?,
             )
             .map_err(|err| err.to_string())?;
-            read_scale_once(config).map(|weight| ok("Leitura de balanca concluida.".to_string(), json!({ "weightKg": weight })))
+            read_scale_once(config).map(|weight| {
+                ok(
+                    "Leitura de balanca concluida.".to_string(),
+                    json!({ "weightKg": weight }),
+                )
+            })
         }
         "read_scale_raw" => {
             let config: crate::config::ScaleConfig = serde_json::from_value(
-                request.args.get("scale").cloned().ok_or_else(|| "Campo scale ausente.".to_string())?,
+                request
+                    .args
+                    .get("scale")
+                    .cloned()
+                    .ok_or_else(|| "Campo scale ausente.".to_string())?,
             )
             .map_err(|err| err.to_string())?;
-            read_scale_raw(config).map(|frame| ok("Frame bruto da balanca lido.".to_string(), json!({ "frame": frame })))
+            read_scale_raw(config).map(|frame| {
+                ok(
+                    "Frame bruto da balanca lido.".to_string(),
+                    json!({ "frame": frame }),
+                )
+            })
         }
         "diagnose_scale_serial" => {
             let config: crate::config::ScaleConfig = serde_json::from_value(
-                request.args.get("scale").cloned().ok_or_else(|| "Campo scale ausente.".to_string())?,
+                request
+                    .args
+                    .get("scale")
+                    .cloned()
+                    .ok_or_else(|| "Campo scale ausente.".to_string())?,
             )
             .map_err(|err| err.to_string())?;
             diagnose_scale_serial(config)
@@ -221,8 +269,12 @@ pub fn ai_run_local_tool(
         "test_scale_parse" => {
             let frame = required_string(&request.args, "frame")?;
             let parser_regex = required_string(&request.args, "parserRegex")?;
-            test_scale_parse(frame, parser_regex)
-                .map(|weight| ok("Parser de balanca validado.".to_string(), json!({ "weightKg": weight })))
+            test_scale_parse(frame, parser_regex).map(|weight| {
+                ok(
+                    "Parser de balanca validado.".to_string(),
+                    json!({ "weightKg": weight }),
+                )
+            })
         }
         "refresh_devices" => Ok(ok(
             "Dispositivos atualizados.".to_string(),
@@ -242,7 +294,10 @@ fn hash_password(password: &str) -> String {
 }
 
 fn require_admin(token: &str, state: &tauri::State<AdminState>) -> Result<(), String> {
-    let guard = state.inner.lock().map_err(|_| "Estado admin indisponivel.".to_string())?;
+    let guard = state
+        .inner
+        .lock()
+        .map_err(|_| "Estado admin indisponivel.".to_string())?;
     if is_session_valid(&guard, Some(token)) {
         Ok(())
     } else {
@@ -278,7 +333,8 @@ fn powershell_json(script: &str) -> Value {
         match output {
             Ok(output) if output.status.success() => {
                 let stdout = String::from_utf8_lossy(&output.stdout);
-                serde_json::from_str(stdout.trim()).unwrap_or_else(|_| json!({ "raw": stdout.trim() }))
+                serde_json::from_str(stdout.trim())
+                    .unwrap_or_else(|_| json!({ "raw": stdout.trim() }))
             }
             Ok(output) => json!({ "error": String::from_utf8_lossy(&output.stderr).trim() }),
             Err(err) => json!({ "error": err.to_string() }),
@@ -337,7 +393,10 @@ fn clear_print_queue(queue_name: String) -> Result<LocalToolResult, String> {
         if !output.status.success() {
             return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
         }
-        Ok(ok(format!("Fila {queue_name} limpa."), json!({ "queueName": queue_name })))
+        Ok(ok(
+            format!("Fila {queue_name} limpa."),
+            json!({ "queueName": queue_name }),
+        ))
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -354,7 +413,10 @@ fn test_tcp_connection(host: String, port: u16) -> Result<LocalToolResult, Strin
         .next()
         .ok_or_else(|| "Host TCP invalido.".to_string())?;
     TcpStream::connect_timeout(&addr, Duration::from_secs(3)).map_err(|err| err.to_string())?;
-    Ok(ok(format!("Conexao TCP OK em {host}:{port}."), json!({ "host": host, "port": port })))
+    Ok(ok(
+        format!("Conexao TCP OK em {host}:{port}."),
+        json!({ "host": host, "port": port }),
+    ))
 }
 
 fn diagnose_scale_serial(config: crate::config::ScaleConfig) -> Result<LocalToolResult, String> {
@@ -366,10 +428,29 @@ fn diagnose_scale_serial(config: crate::config::ScaleConfig) -> Result<LocalTool
     }
 
     let mut attempts = Vec::new();
-    let mut commands = vec![None, Some("SI"), Some("P"), Some("W"), Some("S")];
-    if let Some(command) = config.read_command.as_deref().filter(|value| !value.trim().is_empty()) {
+    let mut commands = vec![
+        Some("ENQ"),
+        Some("hex:05"),
+        None,
+        Some("ctrl:SI"),
+        Some("ctrl:SO"),
+        Some("hex:0F"),
+        Some("hex:0E"),
+        Some("hex:05 0D"),
+        Some("hex:0F 0D"),
+        Some("SI"),
+        Some("P"),
+        Some("W"),
+        Some("S"),
+    ];
+    if let Some(command) = config
+        .read_command
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
         commands.insert(0, Some(command));
     }
+    commands.dedup();
 
     let mut bauds = vec![config.baud_rate, 9600, 4800, 19200];
     bauds.sort_unstable();
@@ -423,7 +504,9 @@ fn required_string(args: &Value, key: &str) -> Result<String, String> {
 }
 
 fn optional_u16(args: &Value, key: &str) -> Option<u16> {
-    args.get(key).and_then(Value::as_u64).and_then(|value| u16::try_from(value).ok())
+    args.get(key)
+        .and_then(Value::as_u64)
+        .and_then(|value| u16::try_from(value).ok())
 }
 
 fn to_json<T: Serialize, E: ToString>(result: Result<T, E>) -> Value {
@@ -434,7 +517,11 @@ fn to_json<T: Serialize, E: ToString>(result: Result<T, E>) -> Value {
 }
 
 fn ok(message: String, data: Value) -> LocalToolResult {
-    LocalToolResult { ok: true, message, data }
+    LocalToolResult {
+        ok: true,
+        message,
+        data,
+    }
 }
 
 #[cfg(test)]
@@ -449,7 +536,10 @@ mod tests {
 
     #[test]
     fn rejects_unknown_tool_names() {
-        let request = LocalToolRequest { tool: "powershell".to_string(), args: json!({}) };
+        let request = LocalToolRequest {
+            tool: "powershell".to_string(),
+            args: json!({}),
+        };
         assert_eq!(request.tool, "powershell");
     }
 }

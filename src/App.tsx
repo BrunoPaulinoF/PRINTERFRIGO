@@ -25,7 +25,7 @@ import {
 } from "./api";
 import type { AiProposedAction, PortInfo, PrinterConfig, PrinterInfo, ScaleConfig, StationConfig } from "./types";
 
-const VERSION = "0.2.16";
+const VERSION = "0.2.17";
 const STATION_PASSWORD_HASH = "412b800684ad737f0b892151ccfd8b45578a413d2607c8ff0a134aeeeffbf186";
 const STATION_PASSWORD_SALT = "printerfrigo-station-v1";
 
@@ -37,6 +37,7 @@ async function hashStationPassword(password: string) {
     .join("");
 }
 const DEFAULT_SERVER_URL = "https://kyberfrigo.kybernan.com.br";
+const TOLEDO_TI200_PARSER = "toledo:ti200";
 const ACTIVE_SERVICE_POLL_MS = 2000;
 const IDLE_SERVICE_POLL_MS = 300000;
 const OFFLINE_REALTIME_IDLE_SERVICE_POLL_MS = 60000;
@@ -328,6 +329,20 @@ export function App() {
     const nextScales = [...scales];
     nextScales[index] = { ...nextScales[index], ...patch };
     setConfig((prev) => ({ ...prev, scale: nextScales[0], scales: nextScales }));
+  }
+
+  function applyToledoTi200Preset(index: number) {
+    updateScaleAt(index, {
+      mode: "serial",
+      baudRate: 9600,
+      dataBits: 8,
+      stopBits: 1,
+      parity: "none",
+      readCommand: "ENQ",
+      parserRegex: TOLEDO_TI200_PARSER,
+    });
+    setScaleFrame("\u0002+012,345\u0003");
+    setStatus("Preset Toledo TI200/Prix aplicado: 9600 8N1, comando ENQ e parser P05/P06/P07.");
   }
 
   function addScale() {
@@ -1048,7 +1063,7 @@ export function App() {
                     {ports.map((port) => <option key={port.name} value={port.name}>{port.name} - {port.kind}</option>)}
                   </select>
                   <label>Comando de leitura (opcional)</label>
-                  <input value={scale.readCommand ?? ""} onChange={(e) => updateScaleAt(index, { readCommand: e.target.value })} placeholder="Ex: SI (para Toledo 9091)" />
+                  <input value={scale.readCommand ?? ""} onChange={(e) => updateScaleAt(index, { readCommand: e.target.value })} placeholder="Ex: ENQ (Toledo TI200/Prix)" />
                 </>
               )}
               <div className="split">
@@ -1057,6 +1072,7 @@ export function App() {
               </div>
               <label>Regex parser</label>
               <input value={scale.parserRegex} onChange={(e) => updateScaleAt(index, { parserRegex: e.target.value })} />
+              <button className="ghost" onClick={() => applyToledoTi200Preset(index)} disabled={isBusy}>Preset Toledo TI200/Prix</button>
             </div>
           ))}
           <div className="test-strip">
