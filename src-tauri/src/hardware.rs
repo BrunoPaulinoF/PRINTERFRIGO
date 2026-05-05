@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use serialport::SerialPortType;
 use std::io::{Read, Write};
+use std::net::TcpStream;
 use std::time::Duration;
 
 #[derive(Debug, Serialize)]
@@ -104,6 +105,26 @@ pub fn read_scale_once(config: ScaleConfig) -> Result<f64, String> {
         return Ok(weight);
     }
 
+    if config.mode.as_deref() == Some("tcp") {
+        let host = config.host.as_ref().filter(|h| !h.is_empty()).ok_or("Host TCP da balanca nao configurado.".to_string())?;
+        let port = if config.port.is_empty() { "4001".to_string() } else { config.port.clone() };
+        let port_num = port.parse::<u16>().map_err(|_| format!("Porta TCP invalida: {port}"))?;
+        
+        let mut stream = TcpStream::connect((host.as_str(), port_num))
+            .map_err(|err| format!("Falha ao conectar na balanca TCP {host}:{port_num}: {err}"))?;
+        stream.set_read_timeout(Some(Duration::from_millis(1500)))
+            .map_err(|err| err.to_string())?;
+        
+        if let Some(command) = config.read_command.as_ref().filter(|value| !value.is_empty()) {
+            stream.write_all(command.as_bytes()).map_err(|err| err.to_string())?;
+        }
+        
+        let mut buffer = vec![0_u8; 256];
+        let read = stream.read(buffer.as_mut_slice()).map_err(|err| err.to_string())?;
+        let frame = String::from_utf8_lossy(&buffer[..read]);
+        return parse_weight_frame(&frame, &config.parser_regex);
+    }
+
     if config.port.trim().is_empty() {
         return Err("Porta serial da balanca nao configurada.".to_string());
     }
@@ -139,15 +160,23 @@ pub fn read_scale_once(config: ScaleConfig) -> Result<f64, String> {
 #[allow(dead_code)]
 pub fn build_scale_device(config: &ScaleConfig) -> serde_json::Value {
     let simulated = config.mode.as_deref() == Some("simulated");
+    let tcp = config.mode.as_deref() == Some("tcp");
+    let local_id = if tcp {
+        format!("{}:{}", config.host.as_deref().unwrap_or(""), config.port)
+    } else {
+        config.port.clone()
+    };
     json!({
         "kind": "SCALE",
-        "localId": config.port,
+        "localId": local_id,
         "name": if simulated {
             format!("Balanca simulada {}", config.port)
+        } else if tcp {
+            format!("Balanca TCP {}", local_id)
         } else {
             format!("Balanca {}", config.port)
         },
-        "status": if config.port.is_empty() { "OFFLINE" } else { "ONLINE" },
+        "status": if config.port.is_empty() && !tcp { "OFFLINE" } else { "ONLINE" },
         "config": config
     })
 }
@@ -321,6 +350,7 @@ mod tests {
         let config = ScaleConfig {
             mode: Some("simulated".to_string()),
             port: "Balanca 1".to_string(),
+            host: None,
             simulated_weight_kg: Some(12.345),
             baud_rate: 9600,
             data_bits: 8,

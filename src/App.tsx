@@ -133,9 +133,12 @@ function normalizeConfig(config: StationConfig): StationConfig {
 function normalizeScales(scales: ScaleConfig[] | undefined, fallback: ScaleConfig) {
   const items = (scales && scales.length > 0 ? scales : [fallback])
     .map((scale) => ({ ...defaultConfig.scale, ...scale }))
-    .filter((scale, index, all) => scale.port || scale.mode === "simulated" || index === 0 && all.length === 1);
-  if (!items.some((scale) => scale.port === fallback.port)) items.unshift(fallback);
-  return dedupeBy(items, (scale) => scale.port || "default-scale");
+    .filter((scale, index, all) => scale.port || scale.mode === "simulated" || scale.mode === "tcp" || index === 0 && all.length === 1);
+  if (!items.some((scale) => scale.port === fallback.port && scale.host === fallback.host)) items.unshift(fallback);
+  return dedupeBy(items, (scale) => {
+    if (scale.mode === "tcp") return `${scale.host || ""}:${scale.port || "4001"}`;
+    return scale.port || "default-scale";
+  });
 }
 
 function normalizePrinters(printers: PrinterConfig[] | undefined, fallback: PrinterConfig) {
@@ -158,6 +161,7 @@ function dedupeBy<T>(items: T[], keyOf: (item: T) => string) {
 
 function scaleLabel(scale: ScaleConfig, index: number) {
   if (scale.mode === "simulated") return `${scale.port || `Balanca ${index + 1}`} (simulada)`;
+  if (scale.mode === "tcp") return `${scale.host || ""}:${scale.port || "4001"} (TCP)`;
   return scale.port ? `${scale.port}` : `Balanca ${index + 1}`;
 }
 
@@ -362,7 +366,12 @@ export function App() {
 
   function scaleForSession(session: HardwareSession) {
     const localId = typeof session.context.scaleLocalId === "string" ? session.context.scaleLocalId : "";
-    return scales.find((scale) => scale.port === localId) ?? config.scale;
+    return scales.find((scale) => {
+      if (scale.mode === "tcp") {
+        return `${scale.host || ""}:${scale.port}` === localId;
+      }
+      return scale.port === localId;
+    }) ?? config.scale;
   }
 
   function printerForLocalId(localId: string | null | undefined) {
@@ -413,7 +422,9 @@ export function App() {
     const printer = config.printer;
     const scale = config.scale;
     const printerLocalId = printer.queueName || printer.localId || printer.host || "";
-    const scaleLocalId = scale.port || (scale.mode === "simulated" ? "Balanca 1" : "");
+    const scaleLocalId = scale.mode === "tcp" 
+      ? `${scale.host || ""}:${scale.port || "4001"}` 
+      : (scale.port || (scale.mode === "simulated" ? "Balanca 1" : ""));
     if (printer.mode === "windows_spooler" && !printer.queueName) {
       setStatus("Selecione a impressora Windows antes de sincronizar Receiving.");
       return;
@@ -973,9 +984,10 @@ export function App() {
               <label>Modo</label>
               <select value={scale.mode ?? "serial"} onChange={(e) => updateScaleAt(index, {
                 mode: e.target.value as ScaleConfig["mode"],
-                port: e.target.value === "simulated" ? (scale.port || "Balanca 1") : "",
+                port: e.target.value === "simulated" ? (scale.port || "Balanca 1") : e.target.value === "tcp" ? (scale.port || "4001") : "",
               })}>
                 <option value="serial">Serial real</option>
+                <option value="tcp">TCP/IP (rede)</option>
                 <option value="simulated">Simulada para teste</option>
               </select>
               {scale.mode === "simulated" ? (
@@ -984,6 +996,13 @@ export function App() {
                   <input value={scale.port} onChange={(e) => updateScaleAt(index, { port: e.target.value })} placeholder="Ex: Balanca 1" />
                   <label>Peso simulado kg</label>
                   <input type="number" step="0.001" value={scale.simulatedWeightKg ?? 12.345} onChange={(e) => updateScaleAt(index, { simulatedWeightKg: Number(e.target.value) })} />
+                </>
+              ) : scale.mode === "tcp" ? (
+                <>
+                  <label>IP/Host da balanca</label>
+                  <input value={scale.host ?? ""} onChange={(e) => updateScaleAt(index, { host: e.target.value })} placeholder="Ex: 192.168.0.100" />
+                  <label>Porta TCP</label>
+                  <input value={scale.port} onChange={(e) => updateScaleAt(index, { port: e.target.value })} placeholder="Ex: 4001" />
                 </>
               ) : (
                 <>

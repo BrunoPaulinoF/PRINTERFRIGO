@@ -1,6 +1,7 @@
 export type ScaleConfig = {
-  mode?: "serial" | "simulated";
+  mode?: "serial" | "simulated" | "tcp";
   port: string;
+  host?: string;
   simulatedWeightKg?: number;
   baudRate: number;
   dataBits: number;
