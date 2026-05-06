@@ -25,7 +25,7 @@ import {
 } from "./api";
 import type { AiProposedAction, PortInfo, PrinterConfig, PrinterInfo, ScaleConfig, StationConfig } from "./types";
 
-const VERSION = "0.2.17";
+const VERSION = "0.2.18";
 const STATION_PASSWORD_HASH = "412b800684ad737f0b892151ccfd8b45578a413d2607c8ff0a134aeeeffbf186";
 const STATION_PASSWORD_SALT = "printerfrigo-station-v1";
 
@@ -423,8 +423,9 @@ export function App() {
           const weight = await testScaleParse(frame, config.scale.parserRegex);
           setLastWeight(weight);
         }
-      } catch {
+      } catch (parseError) {
         setLastWeight(null);
+        setStatus(errorMessage(parseError, "Frame recebido, mas o parser ainda nao reconheceu o peso."));
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Erro ao ler balanca.";

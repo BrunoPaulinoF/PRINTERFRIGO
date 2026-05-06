@@ -68,8 +68,9 @@ pub fn list_serial_ports() -> Result<Vec<PortInfo>, String> {
 }
 
 pub fn parse_weight_frame(frame: &str, parser_regex: &str) -> Result<f64, String> {
-    if parser_regex.trim().eq_ignore_ascii_case("toledo:ti200") {
-        return parse_toledo_ti200_frame(frame);
+    let parser = parser_regex.trim();
+    if parser.eq_ignore_ascii_case("toledo:ti200") || parser.to_ascii_lowercase().starts_with("toledo:ti200:p05:") {
+        return parse_toledo_ti200_frame(frame, parser);
     }
 
     let regex = Regex::new(parser_regex).map_err(|err| format!("Regex invalido: {err}"))?;
@@ -89,7 +90,8 @@ pub fn parse_weight_frame(frame: &str, parser_regex: &str) -> Result<f64, String
         .map_err(|err| format!("Peso invalido '{raw}': {err}"))
 }
 
-fn parse_toledo_ti200_frame(frame: &str) -> Result<f64, String> {
+fn parse_toledo_ti200_frame(frame: &str, parser: &str) -> Result<f64, String> {
+    let frame = strip_control_chars(frame);
     let upper = frame.to_ascii_uppercase();
     if upper.contains("IIIII") || upper.contains("III,III") || upper.contains("III.III") {
         return Err("TI200 indicou peso instavel.".to_string());
@@ -110,7 +112,7 @@ fn parse_toledo_ti200_frame(frame: &str) -> Result<f64, String> {
         r"(?P<weight>\d{1,7}[\.,]\d{1,6})\s*(?:KG|LB)?",
     ] {
         let regex = Regex::new(pattern).map_err(|err| format!("Regex TI200 invalido: {err}"))?;
-        if let Some(captures) = regex.captures(frame) {
+        if let Some(captures) = regex.captures(&frame) {
             let raw = captures
                 .name("weight")
                 .ok_or_else(|| "Parser TI200 nao encontrou peso.".to_string())?
@@ -123,7 +125,43 @@ fn parse_toledo_ti200_frame(frame: &str) -> Result<f64, String> {
         }
     }
 
+    let p05_regex = Regex::new(r"(?P<weight>\d{5,7})").map_err(|err| format!("Regex TI200 invalido: {err}"))?;
+    if let Some(captures) = p05_regex.captures(&frame) {
+        let raw = captures
+            .name("weight")
+            .ok_or_else(|| "Parser TI200 nao encontrou peso.".to_string())?
+            .as_str();
+        if let Some(decimals) = parser
+            .to_ascii_lowercase()
+            .strip_prefix("toledo:ti200:p05:")
+            .and_then(|value| value.parse::<i32>().ok())
+        {
+            let value = raw
+                .parse::<f64>()
+                .map_err(|err| format!("Peso TI200 P05 invalido '{raw}': {err}"))?;
+            return Ok(value / 10_f64.powi(decimals));
+        }
+        return Err(format!(
+            "TI200 respondeu P05/P05A sem separador decimal ({raw}). Configure o indicador em C14=P07/P06 ou use parserRegex toledo:ti200:p05:N, onde N e o numero de casas decimais. Ex.: toledo:ti200:p05:2 para {raw} = {:.2} kg.",
+            raw.parse::<f64>().unwrap_or(0.0) / 100.0
+        ));
+    }
+
     Err("Frame TI200 nao contem peso reconhecido.".to_string())
+}
+
+fn strip_control_chars(frame: &str) -> String {
+    frame
+        .chars()
+        .filter(|ch| !ch.is_control() || *ch == '\t')
+        .collect()
+}
+
+fn decode_frame_bytes(bytes: &[u8], parser_regex: &str) -> String {
+    if parser_regex.trim().to_ascii_lowercase().starts_with("toledo:ti200") {
+        return bytes.iter().map(|byte| char::from(byte & 0x7f)).collect();
+    }
+    String::from_utf8_lossy(bytes).to_string()
 }
 
 #[allow(dead_code)]
@@ -188,7 +226,7 @@ pub fn read_scale_once(config: ScaleConfig) -> Result<f64, String> {
         let read = stream
             .read(buffer.as_mut_slice())
             .map_err(|err| err.to_string())?;
-        let frame = String::from_utf8_lossy(&buffer[..read]);
+        let frame = decode_frame_bytes(&buffer[..read], &config.parser_regex);
         return parse_weight_frame(&frame, &config.parser_regex);
     }
 
@@ -231,7 +269,7 @@ pub fn read_scale_once(config: ScaleConfig) -> Result<f64, String> {
     let read = port
         .read(buffer.as_mut_slice())
         .map_err(|err| err.to_string())?;
-    let frame = String::from_utf8_lossy(&buffer[..read]);
+    let frame = decode_frame_bytes(&buffer[..read], &config.parser_regex);
     parse_weight_frame(&frame, &config.parser_regex)
 }
 
@@ -396,12 +434,20 @@ fn format_raw_bytes(bytes: &[u8]) -> String {
     let text = String::from_utf8_lossy(bytes)
         .replace('\r', "\\r")
         .replace('\n', "\\n");
+    let ascii_7bit = bytes
+        .iter()
+        .map(|byte| char::from(byte & 0x7f))
+        .collect::<String>()
+        .replace('\u{02}', "<STX>")
+        .replace('\u{03}', "<ETX>")
+        .replace('\r', "\\r")
+        .replace('\n', "\\n");
     let hex = bytes
         .iter()
         .map(|byte| format!("{byte:02X}"))
         .collect::<Vec<_>>()
         .join(" ");
-    format!("Texto: {text}\nHex: {hex}\nBytes: {}", bytes.len())
+    format!("Texto: {text}\nASCII 7-bit: {ascii_7bit}\nHex: {hex}\nBytes: {}", bytes.len())
 }
 
 #[allow(dead_code)]
@@ -642,6 +688,24 @@ mod tests {
     fn parses_toledo_ti200_p07_frame() {
         let weight = parse_weight_frame("\u{02}+012,345\u{03}", "toledo:ti200").unwrap();
         assert!((weight - 12.345).abs() < 0.0001);
+    }
+
+    #[test]
+    fn decodes_toledo_ti200_7bit_parity_frame() {
+        let frame = decode_frame_bytes(&[0x02, 0xb0, 0xb0, 0x31, 0x31, 0x34, 0x83], "toledo:ti200");
+        assert_eq!(frame, "\u{02}00114\u{03}");
+    }
+
+    #[test]
+    fn toledo_ti200_requires_decimals_for_p05_frame() {
+        let error = parse_weight_frame("\u{02}00114\u{03}", "toledo:ti200").unwrap_err();
+        assert!(error.contains("P05/P05A"));
+    }
+
+    #[test]
+    fn parses_toledo_ti200_p05_with_configured_decimals() {
+        let weight = parse_weight_frame("\u{02}00114\u{03}", "toledo:ti200:p05:2").unwrap();
+        assert!((weight - 1.14).abs() < 0.0001);
     }
 
     #[test]
