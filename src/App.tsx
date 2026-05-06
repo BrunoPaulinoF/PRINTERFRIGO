@@ -29,6 +29,21 @@ const VERSION = "0.2.18";
 const STATION_PASSWORD_HASH = "412b800684ad737f0b892151ccfd8b45578a413d2607c8ff0a134aeeeffbf186";
 const STATION_PASSWORD_SALT = "printerfrigo-station-v1";
 
+interface ScalePreset {
+  label: string;
+  baudRate: number;
+  dataBits: number;
+  stopBits: number;
+  parity: "none" | "even" | "odd";
+  readCommand: string;
+  parserRegex: string;
+}
+
+const SCALE_PRESETS: ScalePreset[] = [
+  { label: "Toledo 9091 (Protocol G)", baudRate: 9600, dataBits: 8, stopBits: 1, parity: "none", readCommand: "SI", parserRegex: "toledo:ti200:p05:3" },
+  { label: "Toledo TI200/Prix (Protocol G)", baudRate: 9600, dataBits: 8, stopBits: 1, parity: "none", readCommand: "ENQ", parserRegex: "toledo:ti200" },
+];
+
 async function hashStationPassword(password: string) {
   const data = new TextEncoder().encode(`${STATION_PASSWORD_SALT}:${password.trim()}`);
   const buffer = await crypto.subtle.digest("SHA-256", data);
@@ -37,7 +52,7 @@ async function hashStationPassword(password: string) {
     .join("");
 }
 const DEFAULT_SERVER_URL = "https://kyberfrigo.kybernan.com.br";
-const TOLEDO_TI200_PARSER = "toledo:ti200";
+
 const ACTIVE_SERVICE_POLL_MS = 2000;
 const IDLE_SERVICE_POLL_MS = 300000;
 const OFFLINE_REALTIME_IDLE_SERVICE_POLL_MS = 60000;
@@ -331,19 +346,7 @@ export function App() {
     setConfig((prev) => ({ ...prev, scale: nextScales[0], scales: nextScales }));
   }
 
-  function applyToledoTi200Preset(index: number) {
-    updateScaleAt(index, {
-      mode: "serial",
-      baudRate: 9600,
-      dataBits: 8,
-      stopBits: 1,
-      parity: "none",
-      readCommand: "ENQ",
-      parserRegex: TOLEDO_TI200_PARSER,
-    });
-    setScaleFrame("\u0002+012,345\u0003");
-    setStatus("Preset Toledo TI200/Prix aplicado: 9600 8N1, comando ENQ e parser P05/P06/P07.");
-  }
+
 
   function addScale() {
     setConfig((prev) => {
@@ -1073,7 +1076,22 @@ export function App() {
               </div>
               <label>Regex parser</label>
               <input value={scale.parserRegex} onChange={(e) => updateScaleAt(index, { parserRegex: e.target.value })} />
-              <button className="ghost" onClick={() => applyToledoTi200Preset(index)} disabled={isBusy}>Preset Toledo TI200/Prix</button>
+              <div className="preset-row">
+                <select
+                  onChange={(e) => {
+                    const idx = Number(e.target.value);
+                    if (!isNaN(idx)) {
+                      const p = SCALE_PRESETS[idx];
+                      updateScaleAt(index, { baudRate: p.baudRate, dataBits: p.dataBits, stopBits: p.stopBits, parity: p.parity, readCommand: p.readCommand, parserRegex: p.parserRegex });
+                      setStatus(`Preset "${p.label}" aplicado.`); e.target.value = "";
+                    }
+                  }}
+                  defaultValue=""
+                >
+                  <option value="" disabled>Selecionar preset...</option>
+                  {SCALE_PRESETS.map((p, i) => <option key={i} value={i}>{p.label}</option>)}
+                </select>
+              </div>
             </div>
           ))}
           <div className="test-strip">
