@@ -1,6 +1,6 @@
 [package]
 name = "printerfrigo"
-version = "0.2.18"
+version = "0.3.0"
 description = "Agente desktop KyberFrigo para balancas e impressoras"
 authors = ["KyberFrigo"]
 edition = "2021"

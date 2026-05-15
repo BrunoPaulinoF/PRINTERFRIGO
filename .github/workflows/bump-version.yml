@@ -1,0 +1,123 @@
+name: Bump Version
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Tipo de bump"
+        required: true
+        type: choice
+        default: "patch"
+        options:
+          - patch
+          - minor
+          - major
+  push:
+    branches:
+      - main
+      - master
+    paths-ignore:
+      - ".github/**"
+      - "*.md"
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'push' &&
+        !contains(github.event.head_commit.message, 'chore(release)')
+      )
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Determine bump type
+        id: bump_type
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "type=${{ inputs.bump }}" >> $GITHUB_OUTPUT
+          else
+            # Auto-detect from commit messages since last tag
+            LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+            if [ -z "$LAST_TAG" ]; then
+              COMMITS=$(git log --oneline)
+            else
+              COMMITS=$(git log ${LAST_TAG}..HEAD --oneline)
+            fi
+            echo "Commits since last tag:"
+            echo "$COMMITS"
+            if echo "$COMMITS" | grep -qE '(BREAKING CHANGE|!: )'; then
+              echo "type=major" >> $GITHUB_OUTPUT
+            elif echo "$COMMITS" | grep -qE '^[a-f0-9]+ feat(\(.+\))?:'; then
+              echo "type=minor" >> $GITHUB_OUTPUT
+            else
+              echo "type=patch" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+      - name: Read current version from tauri.conf.json
+        id: current_version
+        run: |
+          VERSION=$(node -e "console.log(require('./src-tauri/tauri.conf.json').version)")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Calculate next version
+        id: next_version
+        run: |
+          CURRENT="${{ steps.current_version.outputs.version }}"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+          case "${{ steps.bump_type.outputs.type }}" in
+            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH + 1)) ;;
+          esac
+          NEXT="${MAJOR}.${MINOR}.${PATCH}"
+          echo "version=$NEXT" >> $GITHUB_OUTPUT
+          echo "Next version: $NEXT"
+
+      - name: Update version files
+        run: |
+          NEXT="${{ steps.next_version.outputs.version }}"
+          # package.json
+          node -e "
+            const pkg = require('./package.json');
+            pkg.version = '$NEXT';
+            require('fs').writeFileSync('./package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+          # tauri.conf.json
+          node -e "
+            const cfg = require('./src-tauri/tauri.conf.json');
+            cfg.version = '$NEXT';
+            require('fs').writeFileSync('./src-tauri/tauri.conf.json', JSON.stringify(cfg, null, 2) + '\n');
+          "
+          # Cargo.toml
+          sed -i "s/^version = \".*\"/version = \"$NEXT\"/" src-tauri/Cargo.toml
+
+      - name: Commit and push version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml
+          git commit -m "chore(release): bump version to v${{ steps.next_version.outputs.version }}" || echo "No changes to commit"
+          git push
+
+      - name: Create and push tag
+        run: |
+          TAG="v${{ steps.next_version.outputs.version }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists, skipping"
+          else
+            git tag "$TAG"
+            git push origin "$TAG"
+          fi
