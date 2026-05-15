@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { createClient } from "@supabase/supabase-js";
 import { Bot, CheckCircle2, KeyRound, Lock, PlugZap, Printer, RefreshCw, Save, Scale, ShieldCheck, Unlock, WifiOff, Wrench, Zap } from "lucide-react";
 import logoUrl from "./assets/printerfrigo-logo.svg";
@@ -25,7 +26,7 @@ import {
 } from "./api";
 import type { AiProposedAction, PortInfo, PrinterConfig, PrinterInfo, ScaleConfig, StationConfig } from "./types";
 
-const VERSION = "0.2.18";
+const BUILD_VERSION = "0.3.1";
 const STATION_PASSWORD_HASH = "412b800684ad737f0b892151ccfd8b45578a413d2607c8ff0a134aeeeffbf186";
 const STATION_PASSWORD_SALT = "printerfrigo-station-v1";
 
@@ -98,7 +99,7 @@ function isStable(samples: number[], thresholdKg: number) {
 const defaultConfig: StationConfig = {
   serverUrl: DEFAULT_SERVER_URL,
   stationLabel: "Estacao PRINTERFRIGO",
-  appVersion: VERSION,
+  appVersion: BUILD_VERSION,
   scale: {
     mode: "serial",
     port: "",
@@ -230,6 +231,7 @@ export function App() {
   const [stationError, setStationError] = useState("");
   const [resetBusy, setResetBusy] = useState(false);
   const [resetMessage, setResetMessage] = useState("");
+  const [appVersion, setAppVersion] = useState(BUILD_VERSION);
   const handledCommands = useRef(new Set<string>());
   const processingCommands = useRef(new Set<string>());
   const handledJobs = useRef(new Set<string>());
@@ -245,7 +247,7 @@ export function App() {
     loadConfig()
       .then((saved) => {
         if (saved) {
-          const normalized = normalizeConfig({ ...saved, appVersion: VERSION });
+          const normalized = normalizeConfig({ ...saved, appVersion: BUILD_VERSION });
           setConfig(normalized);
           if (JSON.stringify(normalized) !== JSON.stringify(saved)) {
             void saveConfig(normalized).catch(() => undefined);
@@ -256,6 +258,9 @@ export function App() {
       .catch((error) => setStatus(String(error)));
     void refreshDevices();
     ensureWindowsAutostart().catch(() => undefined);
+    getVersion()
+      .then((v) => setAppVersion(v))
+      .catch(() => {});
   }, []);
 
   const defaultPrinter = printers.find((printer) => printer.isDefault) ?? printers[0];
@@ -303,7 +308,7 @@ export function App() {
   async function persist(next = config) {
     setIsBusy(true);
     try {
-      const normalized = normalizeConfig({ ...next, appVersion: VERSION });
+      const normalized = normalizeConfig({ ...next, appVersion: BUILD_VERSION });
       await saveConfig(normalized);
       setConfig(normalized);
       setStatus("Configuracao salva.");
@@ -971,7 +976,7 @@ export function App() {
           </button>
           {resetMessage && <p className="lock-reset-msg">{resetMessage}</p>}
 
-          <p className="lock-version">v{VERSION}</p>
+          <p className="lock-version">v{appVersion}</p>
         </div>
       </main>
     );
@@ -996,7 +1001,7 @@ export function App() {
             {isEnrolled ? <CheckCircle2 size={16} /> : <WifiOff size={16} />}
             {isEnrolled ? "Matriculado" : "Nao matriculado"}
           </div>
-          <span className="version-badge">v{VERSION}</span>
+          <span className="version-badge">v{appVersion}</span>
           <button className="ghost lock-button" onClick={lockStation} title="Bloquear estacao">
             <Lock size={15} /> Bloquear
           </button>
@@ -1160,7 +1165,7 @@ export function App() {
 
         <div className="panel service-panel">
           <h2><PlugZap size={18} /> Servico</h2>
-          <p className="muted">Versao {VERSION}. O update Tauri fica bloqueado operacionalmente enquanto houver sessao ativa no KyberFrigo.</p>
+          <p className="muted">Versao {appVersion}. O update Tauri fica bloqueado operacionalmente enquanto houver sessao ativa no KyberFrigo.</p>
           <div className="actions">
             <button onClick={() => persist()} disabled={isBusy}><Save size={15} /> Salvar</button>
             <button className="secondary" onClick={heartbeat} disabled={!isEnrolled || isBusy}>Heartbeat</button>

@@ -84,12 +84,18 @@ pub fn run() {
                     match handle.updater() {
                         Ok(updater) => match updater.check().await {
                             Ok(Some(update)) => {
-                                let _ = update.download_and_install(|_, _| {}, || {}).await;
+                                if let Err(err) = update.download_and_install(|_, _| {}, || {}).await {
+                                    let _ = queue::log("error", &format!("updater: falha ao instalar: {err}"), None);
+                                }
                             }
                             Ok(None) => {}
-                            Err(err) => eprintln!("Falha ao checar update: {err}"),
+                            Err(err) => {
+                                let _ = queue::log("error", &format!("updater: falha ao checar: {err}"), None);
+                            }
                         },
-                        Err(err) => eprintln!("Falha ao inicializar updater: {err}"),
+                        Err(err) => {
+                            let _ = queue::log("error", &format!("updater: falha ao inicializar: {err}"), None);
+                        }
                     }
                 });
             }
