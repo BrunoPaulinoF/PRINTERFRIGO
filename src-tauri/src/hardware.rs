@@ -110,6 +110,7 @@ fn parse_toledo_ti200_frame(frame: &str, parser: &str) -> Result<f64, String> {
         r"(?P<weight>[-+]\d{1,6}[\.,]\d{1,6})",
         r"(?P<weight>[-+]\d{1,7})",
         r"(?P<weight>\d{1,7}[\.,]\d{1,6})\s*(?:KG|LB)?",
+        r"[-+]\w\s+(?P<weight>\d{6})",
     ] {
         let regex = Regex::new(pattern).map_err(|err| format!("Regex TI200 invalido: {err}"))?;
         if let Some(captures) = regex.captures(&frame) {
@@ -706,6 +707,12 @@ mod tests {
     fn parses_toledo_ti200_p05_with_configured_decimals() {
         let weight = parse_weight_frame("\u{02}00114\u{03}", "toledo:ti200:p05:2").unwrap();
         assert!((weight - 1.14).abs() < 0.0001);
+    }
+
+    #[test]
+    fn parses_toledo_ti200_status_and_12_digit_frame() {
+        let weight = parse_weight_frame("+q 000025000024", "toledo:ti200").unwrap();
+        assert!((weight - 25.0).abs() < 0.0001);
     }
 
     #[test]
