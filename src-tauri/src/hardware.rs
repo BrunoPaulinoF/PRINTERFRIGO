@@ -106,6 +106,11 @@ fn parse_toledo_ti200_frame(frame: &str, parser: &str) -> Result<f64, String> {
         return Err("TI200 indicou peso negativo no protocolo P05A.".to_string());
     }
 
+    let parser_lower = parser.to_ascii_lowercase();
+    let status_decimals = parser_lower
+        .strip_prefix("toledo:ti200:status:")
+        .and_then(|v| v.parse::<i32>().ok());
+
     for pattern in [
         r"(?P<weight>[-+]\d{1,6}[\.,]\d{1,6})",
         r"(?P<weight>[-+]\d{1,7})",
@@ -118,11 +123,18 @@ fn parse_toledo_ti200_frame(frame: &str, parser: &str) -> Result<f64, String> {
                 .name("weight")
                 .ok_or_else(|| "Parser TI200 nao encontrou peso.".to_string())?
                 .as_str();
-            return raw
+            let value = raw
                 .replace(',', ".")
                 .trim_start_matches('+')
                 .parse::<f64>()
-                .map_err(|err| format!("Peso TI200 invalido '{raw}': {err}"));
+                .map_err(|err| format!("Peso TI200 invalido '{raw}': {err}"))?;
+            
+            if pattern == r"[-+]\w\s+(?P<weight>\d{6})" {
+                let decimals = status_decimals.unwrap_or(1);
+                return Ok(value / 10_f64.powi(decimals));
+            }
+            
+            return Ok(value);
         }
     }
 
@@ -711,8 +723,8 @@ mod tests {
 
     #[test]
     fn parses_toledo_ti200_status_and_12_digit_frame() {
-        let weight = parse_weight_frame("+q 000025000024", "toledo:ti200").unwrap();
-        assert!((weight - 25.0).abs() < 0.0001);
+        let weight = parse_weight_frame("+q 000238000001", "toledo:ti200").unwrap();
+        assert!((weight - 23.8).abs() < 0.0001);
     }
 
     #[test]
