@@ -1,8 +1,8 @@
-# PRINTERFRIGO
+# PrinterFrigo
 
 Aplicativo desktop Windows para conectar o KyberFrigo a balancas e impressoras de etiquetas instaladas na rede ou no computador local.
 
-O PRINTERFRIGO fica rodando na estacao de pesagem. Ele le a balanca, envia o peso para o KyberFrigo, recebe o job de etiqueta em ZPL e imprime direto na impressora configurada, sem abrir popup de impressao do Chrome.
+O PrinterFrigo fica rodando na estacao de pesagem. Ele le a balanca, envia o peso para o KyberFrigo, recebe o job de etiqueta em ZPL e imprime direto na impressora configurada, sem abrir popup de impressao do Chrome.
 
 ## O Que Este App Faz
 
@@ -36,9 +36,9 @@ O KyberFrigo continua sendo dono das regras de negocio:
 - renderizacao do `LabelDesign` para ZPL;
 - fila duravel de capturas e impressoes no Supabase.
 
-### PRINTERFRIGO
+### PrinterFrigo
 
-O PRINTERFRIGO e dono da configuracao fisica local:
+O PrinterFrigo e dono da configuracao fisica local:
 
 - qual porta COM e a balanca;
 - parametros seriais;
@@ -49,7 +49,7 @@ O PRINTERFRIGO e dono da configuracao fisica local:
 - fila/local logs;
 - heartbeat da estacao.
 
-O usuario nao edita modelo de etiqueta no PRINTERFRIGO. O layout fica no site KyberFrigo.
+O usuario nao edita modelo de etiqueta no PrinterFrigo. O layout fica no site KyberFrigo.
 
 ## Fluxo Operacional
 
@@ -59,21 +59,21 @@ O usuario nao edita modelo de etiqueta no PRINTERFRIGO. O layout fica no site Ky
 2. Usuario seleciona NF, fornecedor e produto.
 3. Usuario escolhe captura manual ou automatica.
 4. KyberFrigo cria uma sessao de hardware para o ponto `receiving`.
-5. PRINTERFRIGO recebe a sessao no heartbeat.
+5. PrinterFrigo recebe a sessao no heartbeat.
 6. Se for manual, o site envia `REQUEST_CAPTURE`.
-7. Se for automatico, o PRINTERFRIGO captura ao estabilizar.
-8. PRINTERFRIGO envia peso bruto e metadados.
+7. Se for automatico, o PrinterFrigo captura ao estabilizar.
+8. PrinterFrigo envia peso bruto e metadados.
 9. KyberFrigo cria o volume, gera lote/codigo e cria job ZPL.
-10. PRINTERFRIGO imprime e reporta `PRINTED` ou `FAILED`.
+10. PrinterFrigo imprime e reporta `PRINTED` ou `FAILED`.
 
 ### Saida da OP
 
 1. Usuario abre `/production/cortes/[opId]`.
 2. Usuario seleciona produto e quantidade de pecas.
 3. KyberFrigo cria sessao no ponto `op_to_stock`.
-4. PRINTERFRIGO captura o peso manualmente ou por estabilidade.
+4. PrinterFrigo captura o peso manualmente ou por estabilidade.
 5. KyberFrigo registra volume de saida da OP.
-6. PRINTERFRIGO imprime a etiqueta automaticamente.
+6. PrinterFrigo imprime a etiqueta automaticamente.
 
 ## Requisitos Para Instalar
 
@@ -97,8 +97,8 @@ src-tauri/target/release/bundle/
 Normalmente os arquivos ficam em:
 
 ```text
-src-tauri/target/release/bundle/nsis/PRINTERFRIGO_0.1.0_x64-setup.exe
-src-tauri/target/release/bundle/msi/PRINTERFRIGO_0.1.0_x64_en-US.msi
+src-tauri/target/release/bundle/nsis/PrinterFrigo_0.1.0_x64-setup.exe
+src-tauri/target/release/bundle/msi/PrinterFrigo_0.1.0_x64_en-US.msi
 ```
 
 Use preferencialmente o instalador `.exe` da pasta `nsis`, porque ele e mais simples para usuario final.
@@ -108,7 +108,7 @@ Use preferencialmente o instalador `.exe` da pasta `nsis`, porque ele e mais sim
 No terminal:
 
 ```powershell
-cd C:\Users\keder\Desktop\Antigravity\PRINTERFRIGO
+cd C:\Users\keder\Desktop\Antigravity\PrinterFrigo
 npm install
 npm run tauri:build
 ```
@@ -141,7 +141,7 @@ Se a chave nao tiver senha, deixe `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` vazia.
 1. Copie o instalador `.exe` para o computador da estacao de pesagem.
 2. Execute o instalador.
 3. Se o Windows SmartScreen alertar, clique em "Mais informacoes" e depois "Executar assim mesmo", se voce confiar no instalador.
-4. Abra o PRINTERFRIGO pelo menu iniciar.
+4. Abra o PrinterFrigo pelo menu iniciar.
 5. Deixe o app aberto ou minimizado na bandeja do Windows.
 
 ## Configuracao No KyberFrigo
@@ -152,8 +152,8 @@ Se a chave nao tiver senha, deixe `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` vazia.
 4. Abra `Pontos de Pesagem`.
 5. Clique em `Gerar codigo`.
 6. Copie o codigo exibido.
-7. Depois que o PRINTERFRIGO for matriculado, volte nessa tela.
-8. No ponto desejado, selecione a estacao PRINTERFRIGO.
+7. Depois que o PrinterFrigo for matriculado, volte nessa tela.
+8. No ponto desejado, selecione a estacao PrinterFrigo.
    - Para recebimento, use `receiving`.
    - Para saida da OP, use `op_to_stock`.
 9. Ative:
@@ -161,7 +161,7 @@ Se a chave nao tiver senha, deixe `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` vazia.
    - `Impressao automatica`, se o ponto imprime etiqueta.
 10. Clique em `Salvar Configuracoes`.
 
-## Matricula Do PRINTERFRIGO
+## Matricula Do PrinterFrigo
 
 No aplicativo desktop:
 
@@ -197,7 +197,7 @@ Se falhar:
 
 ## Configuracao Da Balanca
 
-Abra a area `Balanca` no PRINTERFRIGO.
+Abra a area `Balanca` no PrinterFrigo.
 
 ### Porta Serial
 
@@ -217,7 +217,7 @@ Se a porta nao aparecer:
 2. Abra o Gerenciador de Dispositivos do Windows.
 3. Veja em `Portas (COM e LPT)`.
 4. Reinstale o driver USB-serial se necessario.
-5. Clique em `Atualizar` no PRINTERFRIGO.
+5. Clique em `Atualizar` no PrinterFrigo.
 
 ### Baud Rate
 
@@ -313,7 +313,7 @@ Esse modo nao imprime. Ele salva o ZPL em arquivo local para diagnostico.
 Use para validar:
 
 - se o KyberFrigo esta gerando etiqueta;
-- se o PRINTERFRIGO esta recebendo job;
+- se o PrinterFrigo esta recebendo job;
 - se o conteudo ZPL parece correto;
 - se nao ha problema de impressora/driver.
 
@@ -358,7 +358,7 @@ Passos:
 1. Instale o driver da impressora.
 2. Abra `Configuracoes do Windows > Bluetooth e dispositivos > Impressoras e scanners`.
 3. Confirme que a impressora aparece.
-4. No PRINTERFRIGO, clique em `Atualizar`.
+4. No PrinterFrigo, clique em `Atualizar`.
 5. Selecione a fila em `Fila Windows`.
 6. Clique em `Teste ZPL`.
 
@@ -379,7 +379,7 @@ Checklist recomendado:
 3. Defina tamanho da etiqueta conforme o modelo usado no KyberFrigo.
 4. Calibre a midia no botao/utility da impressora.
 5. Teste impressao pelo driver.
-6. Teste `Teste ZPL` no PRINTERFRIGO.
+6. Teste `Teste ZPL` no PrinterFrigo.
 7. Se imprimir texto ZPL, revise linguagem/driver.
 8. Se pular etiquetas, calibre sensor e tamanho da etiqueta.
 
@@ -387,7 +387,7 @@ Checklist recomendado:
 
 Antes de usar em operacao real:
 
-1. No PRINTERFRIGO, coloque impressora em `Dry-run .zpl`.
+1. No PrinterFrigo, coloque impressora em `Dry-run .zpl`.
 2. Matricule a estacao.
 3. Vincule a estacao em `Configuracoes > Pontos de Pesagem`.
 4. Abra `/receiving`.
@@ -401,7 +401,7 @@ Antes de usar em operacao real:
 ## Operacao Diaria
 
 1. Ligue balanca e impressora.
-2. Abra o PRINTERFRIGO.
+2. Abra o PrinterFrigo.
 3. Confira se a estacao esta matriculada.
 4. Confira se a balanca esta lendo.
 5. Confira se a impressora esta configurada.
@@ -413,7 +413,7 @@ Antes de usar em operacao real:
 
 ## Falhas Comuns
 
-### Login KyberFrigo funciona, mas PRINTERFRIGO nao matricula
+### Login KyberFrigo funciona, mas PrinterFrigo nao matricula
 
 - URL do KyberFrigo errada.
 - Codigo expirado.
@@ -485,7 +485,7 @@ Campos importantes:
     "updater": {
       "pubkey": "CHAVE_PUBLICA",
       "endpoints": [
-        "https://github.com/BrunoPaulinoF/PRINTERFRIGO/releases/latest/download/latest.json"
+        "https://github.com/BrunoPaulinoF/PrinterFrigo/releases/latest/download/latest.json"
       ]
     }
   }
@@ -537,7 +537,7 @@ git push origin v0.1.0
 Instalar dependencias:
 
 ```powershell
-cd C:\Users\keder\Desktop\Antigravity\PRINTERFRIGO
+cd C:\Users\keder\Desktop\Antigravity\PrinterFrigo
 npm install
 ```
 
@@ -657,15 +657,15 @@ CANCELLED
 ## Notas Para Agentes De IA
 
 - Nao mover configuracao fisica de balanca/impressora para o KyberFrigo. O desktop e o dono disso.
-- Nao colocar `service_role` no PRINTERFRIGO.
-- Nao editar modelo de etiqueta no PRINTERFRIGO. O site e a fonte do layout.
+- Nao colocar `service_role` no PrinterFrigo.
+- Nao editar modelo de etiqueta no PrinterFrigo. O site e a fonte do layout.
 - Manter ZPL como formato canonico de impressao.
 - Preservar idempotencia por `captureId`.
 - Evitar `window.print()` nos fluxos de pesagem automatica.
 - Nunca commitar `tauri-private.key`.
 - Se alterar payload de jobs, alinhar:
   - KyberFrigo `hardware_print_jobs.payload`;
-  - PRINTERFRIGO `PrintJob`;
+  - PrinterFrigo `PrintJob`;
   - migration Supabase.
 - Se alterar tabelas, atualizar:
   - migration Supabase;

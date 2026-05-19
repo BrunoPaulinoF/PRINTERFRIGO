@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "PRINTERFRIGO",
+  "productName": "PrinterFrigo",
   "version": "0.3.6",
   "identifier": "br.com.kyberfrigo.printerfrigo",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "PRINTERFRIGO",
+        "title": "PrinterFrigo",
         "width": 980,
         "height": 760,
         "minWidth": 760,

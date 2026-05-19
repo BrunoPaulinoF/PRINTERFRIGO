@@ -35,7 +35,7 @@ pub fn run() {
             }
 
             let mut tray_builder = TrayIconBuilder::new()
-                .tooltip("PRINTERFRIGO")
+                .tooltip("PrinterFrigo")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_tray_icon_event(|tray, event| match event {
@@ -126,5 +126,5 @@ pub fn run() {
             printing::quick_reset_printers,
         ])
         .run(tauri::generate_context!())
-        .expect("erro ao executar PRINTERFRIGO");
+        .expect("erro ao executar PrinterFrigo");
 }

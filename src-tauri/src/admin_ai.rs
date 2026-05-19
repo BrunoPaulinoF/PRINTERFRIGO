@@ -156,7 +156,7 @@ pub fn ensure_windows_autostart() -> Result<String, String> {
         let (run, _) = hkcu
             .create_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Run")
             .map_err(|err| err.to_string())?;
-        run.set_value("PRINTERFRIGO", &command)
+        run.set_value("PrinterFrigo", &command)
             .map_err(|err| err.to_string())?;
         Ok("Inicializacao com Windows ativada.".to_string())
     }
@@ -219,7 +219,7 @@ pub fn ai_run_local_tool(
                 .args
                 .get("zpl")
                 .and_then(Value::as_str)
-                .unwrap_or("^XA^FO40,40^A0N,36,36^FDPRINTERFRIGO AI TEST^FS^XZ")
+                .unwrap_or("^XA^FO40,40^A0N,36,36^FDPrinterFrigo AI TEST^FS^XZ")
                 .to_string();
             test_print_zpl(config, zpl).map(|message| ok(message, json!({})))
         }

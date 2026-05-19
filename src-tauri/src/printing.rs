@@ -176,7 +176,7 @@ fn send_raw_to_windows_printer(queue: &str, data: &[u8]) -> Result<(), String> {
             return Err(format!("Nao foi possivel abrir a fila Windows '{queue}': {}", io::Error::last_os_error()));
         }
 
-        let doc_name = wide("PRINTERFRIGO Etiqueta ZPL");
+        let doc_name = wide("PrinterFrigo Etiqueta ZPL");
         let datatype = wide("RAW");
         let doc_info = DOC_INFO_1W {
             pDocName: doc_name.as_ptr() as *mut u16,

@@ -1,4 +1,4 @@
-# AGENTS.md — PRINTERFRIGO
+# AGENTS.md — PrinterFrigo
 
 ## Como fazer release (versão nova)
 

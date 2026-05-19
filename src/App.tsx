@@ -126,7 +126,7 @@ function FieldLabel({ children, help }: { children: string; help: string }) {
 
 const defaultConfig: StationConfig = {
   serverUrl: DEFAULT_SERVER_URL,
-  stationLabel: "Estacao PRINTERFRIGO",
+  stationLabel: "Estacao PrinterFrigo",
   appVersion: BUILD_VERSION,
   scale: {
     mode: "serial",
@@ -299,10 +299,10 @@ export function App() {
     "^PW799",
     "^LL480",
     "^FO35,30^A0N,42,42^FDKYBERFRIGO^FS",
-    "^FO35,84^A0N,30,30^FDTESTE DE IMPRESSAO PRINTERFRIGO^FS",
+    "^FO35,84^A0N,30,30^FDTESTE DE IMPRESSAO PrinterFrigo^FS",
     "^FO35,132^GB720,2,2^FS",
     "^FO35,165^A0N,32,32^FDPESO TESTE: 12,345 KG^FS",
-    "^FO35,215^BY3^BCN,105,Y,N,N^FDTESTE-PRINTERFRIGO-0001^FS",
+    "^FO35,215^BY3^BCN,105,Y,N,N^FDTESTE-PrinterFrigo-0001^FS",
     "^FO35,360^A0N,24,24^FDSe esta etiqueta saiu, a fila Windows aceita ZPL RAW.^FS",
     "^XZ",
   ].join(""), []);
@@ -529,7 +529,7 @@ export function App() {
         body: JSON.stringify({
           weighingPointId: "receiving",
           printer: {
-            name: printer.queueName || printer.host || printer.localId || "Impressora PRINTERFRIGO",
+            name: printer.queueName || printer.host || printer.localId || "Impressora PrinterFrigo",
             mode: printer.mode,
             queueName: printer.queueName,
             host: printer.host,
@@ -539,7 +539,7 @@ export function App() {
             labelType: "custom",
           },
           scale: {
-            name: scale.mode === "simulated" ? "Balanca simulada PRINTERFRIGO" : `Balanca ${scaleLocalId}`,
+            name: scale.mode === "simulated" ? "Balanca simulada PrinterFrigo" : `Balanca ${scaleLocalId}`,
             port: scaleLocalId,
             localId: scaleLocalId,
             baudRate: scale.baudRate,
@@ -849,7 +849,7 @@ export function App() {
       return;
     }
     if (!config.token) {
-      const message = "Matricule o PRINTERFRIGO no KyberFrigo antes de usar a IA. Gere um codigo em Ajustes > Pontos de Pesagem e informe no onboarding.";
+      const message = "Matricule o PrinterFrigo no KyberFrigo antes de usar a IA. Gere um codigo em Ajustes > Pontos de Pesagem e informe no onboarding.";
       setAiError(message);
       setAiReply("");
       setAiActions([]);
@@ -988,8 +988,8 @@ export function App() {
     return (
       <main className="lock-shell">
         <div className="lock-card">
-          <img className="lock-logo" src={logoUrl} alt="PRINTERFRIGO" />
-          <h1>PRINTERFRIGO</h1>
+          <img className="lock-logo" src={logoUrl} alt="PrinterFrigo" />
+          <h1>PrinterFrigo</h1>
           <p className="lock-sub">Estacao bloqueada. Informe a senha para liberar configuracao e diagnostico.</p>
 
           <div className="lock-form">
@@ -1032,9 +1032,9 @@ export function App() {
     <main className="app-shell">
       <section className="topbar">
         <div className="brand">
-          <img className="brand-logo" src={logoUrl} alt="PRINTERFRIGO" />
+          <img className="brand-logo" src={logoUrl} alt="PrinterFrigo" />
           <div>
-            <p className="eyebrow">PRINTERFRIGO</p>
+            <p className="eyebrow">PrinterFrigo</p>
             <h1>Estacao de pesagem e etiquetas</h1>
             <p className="subtitle">Agente local para balancas, impressoras e integracao KyberFrigo.</p>
           </div>
@@ -1189,7 +1189,7 @@ export function App() {
                     <option value="">Selecionar impressora</option>
                     {printers.map((item) => <option key={item.name} value={item.name}>{item.name}{item.isDefault ? " (padrao)" : ""}</option>)}
                   </select>
-                  <p className="tip">Este nome precisa bater com a fila instalada no Windows. O PRINTERFRIGO envia ZPL RAW direto para essa fila.</p>
+                  <p className="tip">Este nome precisa bater com a fila instalada no Windows. O PrinterFrigo envia ZPL RAW direto para essa fila.</p>
                   <div className="row action-row">
                     <button className="secondary" onClick={() => useDefaultPrinter(index)} disabled={isBusy || !defaultPrinter}>Usar impressora padrao</button>
                     <button onClick={() => testPrinterAt(index)} disabled={isBusy || !printer.queueName}>Imprimir etiqueta teste</button>
@@ -1206,7 +1206,7 @@ export function App() {
                 <>
                   <FieldLabel help="Nome local usado para identificar esta saida de teste.">ID local</FieldLabel>
                   <input value={printer.localId} onChange={(e) => updatePrinterAt(index, { localId: e.target.value })} placeholder="Ex: label-01" />
-                  <p className="tip">Modo teste sem impressora. Salva arquivos .zpl em AppData/PRINTERFRIGO/dry-run.</p>
+                  <p className="tip">Modo teste sem impressora. Salva arquivos .zpl em AppData/PrinterFrigo/dry-run.</p>
                   <button onClick={() => testPrinterAt(index)} disabled={isBusy}>Gerar etiqueta teste .zpl</button>
                 </>
               )}
