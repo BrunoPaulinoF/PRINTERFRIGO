@@ -55,6 +55,7 @@ async function hashStationPassword(password: string) {
 const DEFAULT_SERVER_URL = "https://kyberfrigo.kybernan.com.br";
 
 const ACTIVE_SERVICE_POLL_MS = 2000;
+const AUTO_POLL_MS = 1000;
 const IDLE_SERVICE_POLL_MS = 300000;
 const OFFLINE_REALTIME_IDLE_SERVICE_POLL_MS = 60000;
 const MIN_SERVICE_POLL_MS = 1000;
@@ -137,7 +138,7 @@ const defaultConfig: StationConfig = {
     parity: "none",
     readCommand: "",
     parserRegex: "([-+]?\\d+[\\.,]?\\d*)\\s*kg?",
-    stableWindow: 5,
+    stableWindow: 4,
     stableThresholdKg: 0.02,
     stableMs: 1200,
     minWeightKg: 1,
@@ -667,6 +668,11 @@ export function App() {
         state.samples = [];
       }
       autoSessions.current.set(session.id, state);
+    }
+
+    const hasAutoSession = sessions.some((s) => s.mode === "AUTO" && s.status === "ACTIVE");
+    if (hasAutoSession) {
+      serviceNextPollMs.current = Math.min(serviceNextPollMs.current, AUTO_POLL_MS);
     }
 
     if (showStatus || printJobs.length > 0 || sessions.length > 0) {

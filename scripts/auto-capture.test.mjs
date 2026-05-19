@@ -14,6 +14,9 @@ test("automatic capture uses lease, cooldown, and weight-change rearm", async ()
   assert.ok(source.includes("cooldownElapsed"), "auto loop must keep cooldown protection");
   assert.ok(source.includes("weightChanged"), "auto loop must avoid duplicate labels for unchanged stable weight");
   assert.equal(source.includes("waitingZero"), false, "auto loop must not require returning to zero between captures");
+  assert.ok(source.includes("AUTO_POLL_MS"), "auto polling must have its own faster poll interval");
+  assert.ok(source.includes("hasAutoSession"), "auto polling must accelerate when auto sessions are active");
+  assert.equal(source.includes("stableWindow: 5"), false, "default stability window must not keep the old slow value");
 });
 
 test("automatic capture ids are unique beyond millisecond timestamps", async () => {
