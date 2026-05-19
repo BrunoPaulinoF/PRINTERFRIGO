@@ -41,3 +41,15 @@ test("advanced automatic capture thresholds are configurable in the station UI",
   assert.ok(source.includes("cooldownMs"), "cooldown must stay configurable");
   assert.ok(source.includes("zeroThresholdKg"), "zero threshold must stay configurable");
 });
+
+test("station fields include short operator help tooltips", async () => {
+  const source = await readFile(appPath, "utf8");
+
+  assert.ok(source.includes("function FieldLabel"), "UI must use a shared label helper for field help");
+  assert.ok(source.includes('className="help-tip"'), "field help must render visible question-mark tips");
+  assert.ok(source.includes('Peso minimo kg</FieldLabel>'), "minimum weight field must explain capture threshold");
+  assert.ok(source.includes('Janela estabilidade</FieldLabel>'), "stability window field must have operator help");
+  assert.ok(source.includes('Tolerancia kg</FieldLabel>'), "stability tolerance field must have operator help");
+  assert.ok(source.includes('Cooldown ms</FieldLabel>'), "cooldown field must have operator help");
+  assert.ok(source.includes('Zero kg</FieldLabel>'), "zero threshold field must have operator help");
+});

@@ -104,6 +104,51 @@ label {
   text-transform: uppercase;
 }
 
+.field-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.help-tip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  border: 1px solid #b9c7b8;
+  border-radius: 999px;
+  background: #eef5ef;
+  color: #1f6f50;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1;
+  cursor: help;
+}
+
+.help-tip:hover::after,
+.help-tip:focus::after {
+  content: attr(data-help);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  z-index: 20;
+  width: min(260px, 72vw);
+  transform: translateX(-50%);
+  border: 1px solid #cfd8cc;
+  border-radius: 10px;
+  background: #132219;
+  color: #ffffff;
+  padding: 8px 10px;
+  text-align: left;
+  text-transform: none;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+  box-shadow: 0 10px 22px rgba(19, 34, 25, 0.2);
+}
+
 .app-shell {
   min-height: 100vh;
   padding: 30px;

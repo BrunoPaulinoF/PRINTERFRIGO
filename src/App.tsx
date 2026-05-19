@@ -114,6 +114,15 @@ function makeAutoCaptureKey() {
   return `auto-${randomId}`;
 }
 
+function FieldLabel({ children, help }: { children: string; help: string }) {
+  return (
+    <label className="field-label">
+      <span>{children}</span>
+      <span className="help-tip" title={help} aria-label={help} tabIndex={0} data-help={help}>?</span>
+    </label>
+  );
+}
+
 const defaultConfig: StationConfig = {
   serverUrl: DEFAULT_SERVER_URL,
   stationLabel: "Estacao PRINTERFRIGO",
@@ -1045,15 +1054,15 @@ export function App() {
           <p className="section-kicker">Vincule esta estacao ao KyberFrigo e mantenha o nome local organizado.</p>
           <div className="split">
             <div>
-              <label>URL KyberFrigo</label>
+              <FieldLabel help="Endereco do KyberFrigo que esta estacao vai acessar.">URL KyberFrigo</FieldLabel>
               <input value={config.serverUrl} onChange={(e) => setConfig({ ...config, serverUrl: e.target.value })} />
             </div>
             <div>
-              <label>Nome da estacao</label>
+              <FieldLabel help="Nome amigavel para identificar este computador no KyberFrigo.">Nome da estacao</FieldLabel>
               <input value={config.stationLabel} onChange={(e) => setConfig({ ...config, stationLabel: e.target.value })} />
             </div>
           </div>
-          <label>Codigo de matricula</label>
+          <FieldLabel help="Codigo gerado no KyberFrigo para vincular esta estacao com seguranca.">Codigo de matricula</FieldLabel>
           <div className="row">
             <input value={enrollCode} onChange={(e) => setEnrollCode(e.target.value.toUpperCase())} placeholder="ABC12345" />
             <button disabled={isBusy || !enrollCode.trim()} onClick={enroll}>Matricular</button>
@@ -1070,7 +1079,7 @@ export function App() {
                 <strong>{scaleLabel(scale, index)}</strong>
                 {scales.length > 1 && <button className="ghost danger" onClick={() => removeScale(index)} disabled={isBusy}>Remover</button>}
               </div>
-              <label>Modo</label>
+              <FieldLabel help="Tipo de conexao usada para ler a balanca nesta estacao.">Modo</FieldLabel>
               <select value={scale.mode ?? "serial"} onChange={(e) => updateScaleAt(index, {
                 mode: e.target.value as ScaleConfig["mode"],
                 port: e.target.value === "simulated" ? (scale.port || "Balanca 1") : e.target.value === "tcp" ? (scale.port || "4001") : "",
@@ -1081,46 +1090,47 @@ export function App() {
               </select>
               {scale.mode === "simulated" ? (
                 <>
-                  <label>ID local</label>
+                  <FieldLabel help="Identificador local usado apenas para diferenciar esta balanca simulada.">ID local</FieldLabel>
                   <input value={scale.port} onChange={(e) => updateScaleAt(index, { port: e.target.value })} placeholder="Ex: Balanca 1" />
-                  <label>Peso simulado kg</label>
+                  <FieldLabel help="Peso fixo retornado no modo simulado, util para testes sem balanca.">Peso simulado kg</FieldLabel>
                   <input type="number" step="0.001" value={scale.simulatedWeightKg ?? 12.345} onChange={(e) => updateScaleAt(index, { simulatedWeightKg: Number(e.target.value) })} />
                 </>
               ) : scale.mode === "tcp" ? (
                 <>
-                  <label>IP/Host da balanca</label>
+                  <FieldLabel help="IP ou nome de rede da balanca TCP/IP.">IP/Host da balanca</FieldLabel>
                   <input value={scale.host ?? ""} onChange={(e) => updateScaleAt(index, { host: e.target.value })} placeholder="Ex: 192.168.0.100" />
-                  <label>Porta TCP</label>
+                  <FieldLabel help="Porta de rede onde a balanca responde ao comando de leitura.">Porta TCP</FieldLabel>
                   <input value={scale.port} onChange={(e) => updateScaleAt(index, { port: e.target.value })} placeholder="Ex: 4001" />
-                  <label>Comando de leitura</label>
+                  <FieldLabel help="Comando enviado para solicitar uma leitura; depende do modelo da balanca.">Comando de leitura</FieldLabel>
                   <input value={scale.readCommand ?? ""} onChange={(e) => updateScaleAt(index, { readCommand: e.target.value })} placeholder="Ex: SI (para Toledo 9091)" />
                 </>
               ) : (
                 <>
-                  <label>Porta serial</label>
+                  <FieldLabel help="Porta COM onde a balanca esta conectada no Windows.">Porta serial</FieldLabel>
                   <select value={scale.port} onChange={(e) => updateScaleAt(index, { port: e.target.value })}>
                     <option value="">Selecionar porta</option>
                     {ports.map((port) => <option key={port.name} value={port.name}>{port.name} - {port.kind}</option>)}
                   </select>
-                  <label>Comando de leitura (opcional)</label>
+                  <FieldLabel help="Comando serial para pedir peso; deixe vazio se a balanca envia peso sozinha.">Comando de leitura (opcional)</FieldLabel>
                   <input value={scale.readCommand ?? ""} onChange={(e) => updateScaleAt(index, { readCommand: e.target.value })} placeholder="Ex: ENQ (Toledo TI200/Prix)" />
                 </>
               )}
               <div className="split">
-                <div><label>Baud</label><input type="number" value={scale.baudRate} onChange={(e) => updateScaleAt(index, { baudRate: Number(e.target.value) })} /></div>
-                <div><label>Peso minimo kg</label><input type="number" value={scale.minWeightKg} onChange={(e) => updateScaleAt(index, { minWeightKg: Number(e.target.value) })} /></div>
+                <div><FieldLabel help="Velocidade da comunicacao serial; precisa bater com a balanca.">Baud</FieldLabel><input type="number" value={scale.baudRate} onChange={(e) => updateScaleAt(index, { baudRate: Number(e.target.value) })} /></div>
+                <div><FieldLabel help="Peso minimo bruto para aceitar captura automatica ou manual.">Peso minimo kg</FieldLabel><input type="number" value={scale.minWeightKg} onChange={(e) => updateScaleAt(index, { minWeightKg: Number(e.target.value) })} /></div>
               </div>
               <div className="split">
-                <div><label>Janela estabilidade</label><input type="number" min="2" value={scale.stableWindow} onChange={(e) => updateScaleAt(index, { stableWindow: Number(e.target.value) })} /></div>
-                <div><label>Tolerancia kg</label><input type="number" step="0.001" value={scale.stableThresholdKg} onChange={(e) => updateScaleAt(index, { stableThresholdKg: Number(e.target.value) })} /></div>
+                <div><FieldLabel help="Quantidade de leituras seguidas usadas para decidir se o peso estabilizou.">Janela estabilidade</FieldLabel><input type="number" min="2" value={scale.stableWindow} onChange={(e) => updateScaleAt(index, { stableWindow: Number(e.target.value) })} /></div>
+                <div><FieldLabel help="Variacao maxima, em kg, permitida dentro da janela de estabilidade.">Tolerancia kg</FieldLabel><input type="number" step="0.001" value={scale.stableThresholdKg} onChange={(e) => updateScaleAt(index, { stableThresholdKg: Number(e.target.value) })} /></div>
               </div>
               <div className="split">
-                <div><label>Cooldown ms</label><input type="number" min="0" value={scale.cooldownMs} onChange={(e) => updateScaleAt(index, { cooldownMs: Number(e.target.value) })} /></div>
-                <div><label>Zero kg</label><input type="number" step="0.001" value={scale.zeroThresholdKg} onChange={(e) => updateScaleAt(index, { zeroThresholdKg: Number(e.target.value) })} /></div>
+                <div><FieldLabel help="Espera minima entre duas capturas automaticas, em milissegundos.">Cooldown ms</FieldLabel><input type="number" min="0" value={scale.cooldownMs} onChange={(e) => updateScaleAt(index, { cooldownMs: Number(e.target.value) })} /></div>
+                <div><FieldLabel help="Peso considerado balanca vazia; limpa a referencia da ultima captura.">Zero kg</FieldLabel><input type="number" step="0.001" value={scale.zeroThresholdKg} onChange={(e) => updateScaleAt(index, { zeroThresholdKg: Number(e.target.value) })} /></div>
               </div>
-              <label>Regex parser</label>
+              <FieldLabel help="Regra usada para extrair o numero do peso do texto enviado pela balanca.">Regex parser</FieldLabel>
               <input value={scale.parserRegex} onChange={(e) => updateScaleAt(index, { parserRegex: e.target.value })} />
               <div className="preset-row">
+                <FieldLabel help="Preenche automaticamente baud, comando e parser para modelos conhecidos.">Preset da balanca</FieldLabel>
                 <select
                   onChange={(e) => {
                     const idx = Number(e.target.value);
@@ -1160,7 +1170,7 @@ export function App() {
                 <strong>{printerLabel(printer, index)}</strong>
                 {printersConfig.length > 1 && <button className="ghost danger" onClick={() => removePrinter(index)} disabled={isBusy}>Remover</button>}
               </div>
-              <label>Modo</label>
+              <FieldLabel help="Forma usada para enviar a etiqueta ZPL para a impressora.">Modo</FieldLabel>
               <select value={printer.mode} onChange={(e) => updatePrinterAt(index, { mode: e.target.value as StationConfig["printer"]["mode"] })}>
                 <option value="windows_spooler">Fila Windows</option>
                 <option value="tcp_9100">TCP/IP 9100</option>
@@ -1168,7 +1178,7 @@ export function App() {
               </select>
               {printer.mode === "windows_spooler" && (
                 <>
-                  <label>Impressora instalada no Windows</label>
+                  <FieldLabel help="Fila instalada no Windows que vai receber o ZPL RAW.">Impressora instalada no Windows</FieldLabel>
                   <select value={printer.queueName ?? ""} onChange={(e) => updatePrinterAt(index, { queueName: e.target.value, localId: e.target.value || printer.localId })}>
                     <option value="">Selecionar impressora</option>
                     {printers.map((item) => <option key={item.name} value={item.name}>{item.name}{item.isDefault ? " (padrao)" : ""}</option>)}
@@ -1182,13 +1192,13 @@ export function App() {
               )}
               {printer.mode === "tcp_9100" && (
                 <div className="split">
-                  <div><label>IP/Host da impressora</label><input value={printer.host ?? ""} onChange={(e) => updatePrinterAt(index, { host: e.target.value, localId: e.target.value || printer.localId })} placeholder="Ex: 192.168.0.50" /></div>
-                  <div><label>Porta TCP</label><input type="number" value={printer.port ?? 9100} onChange={(e) => updatePrinterAt(index, { port: Number(e.target.value) })} /></div>
+                  <div><FieldLabel help="IP ou nome de rede da impressora de etiquetas.">IP/Host da impressora</FieldLabel><input value={printer.host ?? ""} onChange={(e) => updatePrinterAt(index, { host: e.target.value, localId: e.target.value || printer.localId })} placeholder="Ex: 192.168.0.50" /></div>
+                  <div><FieldLabel help="Porta raw da impressora; normalmente 9100 em Zebra/Elgin.">Porta TCP</FieldLabel><input type="number" value={printer.port ?? 9100} onChange={(e) => updatePrinterAt(index, { port: Number(e.target.value) })} /></div>
                 </div>
               )}
               {printer.mode === "dry_run" && (
                 <>
-                  <label>ID local</label>
+                  <FieldLabel help="Nome local usado para identificar esta saida de teste.">ID local</FieldLabel>
                   <input value={printer.localId} onChange={(e) => updatePrinterAt(index, { localId: e.target.value })} placeholder="Ex: label-01" />
                   <p className="tip">Modo teste sem impressora. Salva arquivos .zpl em AppData/PRINTERFRIGO/dry-run.</p>
                   <button onClick={() => testPrinterAt(index)} disabled={isBusy}>Gerar etiqueta teste .zpl</button>
@@ -1218,7 +1228,7 @@ export function App() {
           <h2><Bot size={18} /> Admin IA</h2>
           {!adminToken ? (
             <>
-              <label>Senha admin</label>
+              <FieldLabel help="Senha local para liberar ferramentas de diagnostico da estacao.">Senha admin</FieldLabel>
               <div className="row">
                 <input
                   type="password"
@@ -1236,7 +1246,7 @@ export function App() {
             </>
           ) : (
             <>
-              <label>Pedido para IA</label>
+              <FieldLabel help="Descreva o problema para a IA diagnosticar balanca, impressora ou configuracao.">Pedido para IA</FieldLabel>
               <textarea value={aiInput} onChange={(e) => setAiInput(e.target.value)} />
               <div className="row">
                 <button onClick={askAi} disabled={aiBusy || !aiInput.trim()}>
