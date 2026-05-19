@@ -60,6 +60,7 @@ const OFFLINE_REALTIME_IDLE_SERVICE_POLL_MS = 60000;
 const MIN_SERVICE_POLL_MS = 1000;
 const MAX_SERVICE_POLL_MS = 600000;
 const REALTIME_TOKEN_REFRESH_MARGIN_MS = 60000;
+const AUTO_SESSION_LEASE_TIMEOUT_MS = 45000;
 
 type HardwareSession = {
   id: string;
@@ -81,12 +82,13 @@ type HeartbeatResult = {
   sessions?: HardwareSession[];
   printJobs?: PrintJob[];
   nextPollMs?: number;
+  serverTime?: string;
 };
 
 type AutoSessionState = {
   samples: number[];
-  waitingZero: boolean;
   lastCapturedAt: number;
+  lastCapturedWeight: number | null;
 };
 
 function isStable(samples: number[], thresholdKg: number) {
@@ -94,6 +96,22 @@ function isStable(samples: number[], thresholdKg: number) {
   const min = Math.min(...samples);
   const max = Math.max(...samples);
   return Math.abs(max - min) <= thresholdKg;
+}
+
+function hasFreshAutoSessionLease(session: HardwareSession, nowMs = Date.now()) {
+  const rawLeaseAt = typeof session.context.browserLeaseAt === "string" ? session.context.browserLeaseAt : "";
+  const leaseAt = rawLeaseAt ? new Date(rawLeaseAt).getTime() : NaN;
+  return Number.isFinite(leaseAt) && nowMs - leaseAt <= AUTO_SESSION_LEASE_TIMEOUT_MS;
+}
+
+function hasMeaningfulWeightChange(weight: number, lastCapturedWeight: number | null, thresholdKg: number) {
+  if (lastCapturedWeight === null) return true;
+  return Math.abs(weight - lastCapturedWeight) > Math.max(0.001, thresholdKg);
+}
+
+function makeAutoCaptureKey() {
+  const randomId = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `auto-${randomId}`;
 }
 
 const defaultConfig: StationConfig = {
@@ -234,7 +252,8 @@ export function App() {
   const [appVersion, setAppVersion] = useState(BUILD_VERSION);
   const handledCommands = useRef(new Set<string>());
   const processingCommands = useRef(new Set<string>());
-  const handledJobs = useRef(new Set<string>());
+  const processingJobs = useRef(new Set<string>());
+  const printedJobs = useRef(new Set<string>());
   const autoSessions = useRef(new Map<string, AutoSessionState>());
   const serviceNextPollMs = useRef(IDLE_SERVICE_POLL_MS);
   const serviceTicking = useRef(false);
@@ -548,6 +567,7 @@ export function App() {
     const result = await heartbeatOnce(config) as HeartbeatResult;
     const printJobs = result.printJobs ?? [];
     const sessions = result.sessions ?? [];
+    const serverNowMs = result.serverTime ? new Date(result.serverTime).getTime() : Date.now();
     const requestedPollMs = typeof result.nextPollMs === "number"
       ? result.nextPollMs
       : printJobs.length > 0 || sessions.length > 0
@@ -559,15 +579,25 @@ export function App() {
     serviceNextPollMs.current = Math.min(MAX_SERVICE_POLL_MS, Math.max(MIN_SERVICE_POLL_MS, fallbackAwarePollMs));
 
     for (const job of printJobs) {
-      if (handledJobs.current.has(job.id)) continue;
-      handledJobs.current.add(job.id);
+      if (processingJobs.current.has(job.id)) continue;
+      processingJobs.current.add(job.id);
       try {
         const zpl = job.payload?.zpl;
         if (!zpl) throw new Error("Job sem payload ZPL.");
-        await testPrintZpl(printerForLocalId(job.printer_local_id), zpl);
+        if (!printedJobs.current.has(job.id)) {
+          await testPrintZpl(printerForLocalId(job.printer_local_id), zpl);
+          printedJobs.current.add(job.id);
+        }
         await reportPrintJob(job.id, "PRINTED");
+        printedJobs.current.delete(job.id);
       } catch (error) {
-        await reportPrintJob(job.id, "FAILED", error instanceof Error ? error.message : "Falha ao imprimir.");
+        if (printedJobs.current.has(job.id)) {
+          setStatus(error instanceof Error ? `Etiqueta impressa, mas falhou ao confirmar: ${error.message}` : "Etiqueta impressa, mas falhou ao confirmar.");
+        } else {
+          await reportPrintJob(job.id, "FAILED", error instanceof Error ? error.message : "Falha ao imprimir.");
+        }
+      } finally {
+        processingJobs.current.delete(job.id);
       }
     }
 
@@ -599,31 +629,32 @@ export function App() {
 
     for (const session of sessions) {
       if (session.mode !== "AUTO" || session.status !== "ACTIVE") continue;
-      const state = autoSessions.current.get(session.id) ?? { samples: [], waitingZero: false, lastCapturedAt: 0 };
+      if (!hasFreshAutoSessionLease(session, Number.isFinite(serverNowMs) ? serverNowMs : Date.now())) continue;
+      const state = autoSessions.current.get(session.id) ?? { samples: [], lastCapturedAt: 0, lastCapturedWeight: null };
       const scale = scaleForSession(session);
       const weight = await readScaleOnce(scale);
       setLastWeight(weight);
 
       if (weight <= scale.zeroThresholdKg) {
-        state.waitingZero = false;
         state.samples = [];
+        state.lastCapturedWeight = null;
         autoSessions.current.set(session.id, state);
         continue;
       }
 
       state.samples = [...state.samples, weight].slice(-Math.max(2, scale.stableWindow));
       const cooldownElapsed = Date.now() - state.lastCapturedAt >= scale.cooldownMs;
+      const weightChanged = hasMeaningfulWeightChange(weight, state.lastCapturedWeight, scale.stableThresholdKg);
       if (
-        !state.waitingZero &&
         cooldownElapsed &&
+        weightChanged &&
         weight >= scale.minWeightKg &&
         state.samples.length >= Math.max(2, scale.stableWindow) &&
         isStable(state.samples, scale.stableThresholdKg)
       ) {
-        const captureId = `auto-${Date.now()}`;
-        await submitCapture(session, weight, captureId);
-        state.waitingZero = true;
+        await submitCapture(session, weight, makeAutoCaptureKey());
         state.lastCapturedAt = Date.now();
+        state.lastCapturedWeight = weight;
         state.samples = [];
       }
       autoSessions.current.set(session.id, state);
@@ -1078,6 +1109,14 @@ export function App() {
               <div className="split">
                 <div><label>Baud</label><input type="number" value={scale.baudRate} onChange={(e) => updateScaleAt(index, { baudRate: Number(e.target.value) })} /></div>
                 <div><label>Peso minimo kg</label><input type="number" value={scale.minWeightKg} onChange={(e) => updateScaleAt(index, { minWeightKg: Number(e.target.value) })} /></div>
+              </div>
+              <div className="split">
+                <div><label>Janela estabilidade</label><input type="number" min="2" value={scale.stableWindow} onChange={(e) => updateScaleAt(index, { stableWindow: Number(e.target.value) })} /></div>
+                <div><label>Tolerancia kg</label><input type="number" step="0.001" value={scale.stableThresholdKg} onChange={(e) => updateScaleAt(index, { stableThresholdKg: Number(e.target.value) })} /></div>
+              </div>
+              <div className="split">
+                <div><label>Cooldown ms</label><input type="number" min="0" value={scale.cooldownMs} onChange={(e) => updateScaleAt(index, { cooldownMs: Number(e.target.value) })} /></div>
+                <div><label>Zero kg</label><input type="number" step="0.001" value={scale.zeroThresholdKg} onChange={(e) => updateScaleAt(index, { zeroThresholdKg: Number(e.target.value) })} /></div>
               </div>
               <label>Regex parser</label>
               <input value={scale.parserRegex} onChange={(e) => updateScaleAt(index, { parserRegex: e.target.value })} />
