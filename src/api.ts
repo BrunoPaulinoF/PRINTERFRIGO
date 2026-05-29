@@ -5,6 +5,7 @@ import type {
   AiLocalSnapshot,
   EnrollmentResult,
   LocalToolResult,
+  LocalLogEntry,
   PortInfo,
   PrinterConfig,
   PrinterInfo,
@@ -108,4 +109,12 @@ export function aiRunLocalTool(token: string, tool: string, args: Record<string,
 
 export function aiSaveStationConfig(token: string, config: StationConfig): Promise<void> {
   return invoke("ai_save_station_config", { token, config });
+}
+
+export function writeLocalLog(level: string, message: string, context?: Record<string, unknown>): Promise<void> {
+  return invoke("write_local_log", { level, message, context });
+}
+
+export function listLocalLogs(limit = 50): Promise<LocalLogEntry[]> {
+  return invoke("list_local_logs", { limit });
 }

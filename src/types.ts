@@ -105,3 +105,11 @@ export type LocalToolResult = {
   message: string;
   data: unknown;
 };
+
+export type LocalLogEntry = {
+  id: number;
+  level: string;
+  message: string;
+  context?: string | null;
+  createdAt: string;
+};

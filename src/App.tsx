@@ -12,6 +12,7 @@ import {
   ensureWindowsAutostart,
   fetchRealtimeToken,
   heartbeatOnce,
+  listLocalLogs,
   listPrinters,
   listSerialPorts,
   loadConfig,
@@ -23,8 +24,9 @@ import {
   submitCapture as submitCaptureApi,
   testPrintZpl,
   testScaleParse,
+  writeLocalLog,
 } from "./api";
-import type { AiProposedAction, PortInfo, PrinterConfig, PrinterInfo, ScaleConfig, StationConfig } from "./types";
+import type { AiProposedAction, LocalLogEntry, PortInfo, PrinterConfig, PrinterInfo, ScaleConfig, StationConfig } from "./types";
 
 const BUILD_VERSION = "0.4.0";
 const STATION_PASSWORD_HASH = "412b800684ad737f0b892151ccfd8b45578a413d2607c8ff0a134aeeeffbf186";
@@ -91,6 +93,8 @@ type AutoSessionState = {
   lastCapturedAt: number;
   lastCapturedWeight: number | null;
 };
+
+type LocalLogLevel = "info" | "warn" | "error";
 
 function isStable(samples: number[], thresholdKg: number) {
   if (samples.length < 2) return false;
@@ -260,6 +264,7 @@ export function App() {
   const [resetBusy, setResetBusy] = useState(false);
   const [resetMessage, setResetMessage] = useState("");
   const [appVersion, setAppVersion] = useState(BUILD_VERSION);
+  const [localLogs, setLocalLogs] = useState<LocalLogEntry[]>([]);
   const handledCommands = useRef(new Set<string>());
   const processingCommands = useRef(new Set<string>());
   const processingJobs = useRef(new Set<string>());
@@ -268,9 +273,21 @@ export function App() {
   const serviceNextPollMs = useRef(IDLE_SERVICE_POLL_MS);
   const serviceTicking = useRef(false);
   const realtimeConnected = useRef(false);
+  const lastServiceErrorLogAt = useRef(0);
   const isEnrolled = Boolean(config.agentId && config.token);
   const scales = config.scales?.length ? config.scales : [config.scale];
   const printersConfig = config.printers?.length ? config.printers : [config.printer];
+
+  const refreshLocalLogs = useCallback(async () => {
+    const logs = await listLocalLogs(30);
+    setLocalLogs(logs);
+  }, []);
+
+  const recordLocalLog = useCallback((level: LocalLogLevel, message: string, context?: Record<string, unknown>) => {
+    void writeLocalLog(level, message, context)
+      .then(refreshLocalLogs)
+      .catch(() => undefined);
+  }, [refreshLocalLogs]);
 
   useEffect(() => {
     loadConfig()
@@ -290,7 +307,8 @@ export function App() {
     getVersion()
       .then((v) => setAppVersion(v))
       .catch(() => {});
-  }, []);
+    void refreshLocalLogs().catch(() => undefined);
+  }, [refreshLocalLogs]);
 
   const defaultPrinter = printers.find((printer) => printer.isDefault) ?? printers[0];
   const sampleZpl = useMemo(() => [
@@ -491,7 +509,22 @@ export function App() {
 
   async function reportPrintJob(jobId: string, nextStatus: "PRINTED" | "FAILED", error?: string) {
     if (!config.token) return;
-    await reportPrintJobApi(config, { jobId, status: nextStatus, error });
+    await reportPrintJobApi(config, { jobId, status: nextStatus, error })
+      .then(() => {
+        recordLocalLog(nextStatus === "FAILED" ? "warn" : "info", "Status de impressao enviado ao KyberFrigo.", {
+          jobId,
+          status: nextStatus,
+          error,
+        });
+      })
+      .catch((reportError) => {
+        recordLocalLog("error", "Falha ao atualizar status de impressao no KyberFrigo.", {
+          jobId,
+          status: nextStatus,
+          error: errorMessage(reportError, "Falha ao atualizar job."),
+        });
+        throw reportError;
+      });
   }
 
   async function syncReceivingConfig() {
@@ -561,15 +594,34 @@ export function App() {
 
   async function submitCapture(session: HardwareSession, weight: number, commandId: string) {
     if (!config.token) return;
+    const captureId = `${session.id}-${commandId}`;
     await submitCaptureApi(config, {
-      captureId: `${session.id}-${commandId}`,
+      captureId,
       sessionId: session.id,
       pointId: session.point_id,
       flow: session.flow,
       grossWeight: weight,
       stable: true,
       payload: { context: session.context },
-    });
+    })
+      .then(() => {
+        recordLocalLog("info", "Captura enviada ao KyberFrigo.", {
+          captureId,
+          sessionId: session.id,
+          flow: session.flow,
+          weight,
+        });
+      })
+      .catch((error) => {
+        recordLocalLog("error", "Falha ao enviar captura ao KyberFrigo.", {
+          captureId,
+          sessionId: session.id,
+          flow: session.flow,
+          weight,
+          error: errorMessage(error, "Falha ao enviar captura."),
+        });
+        throw error;
+      });
   }
 
   const serviceTick = useCallback(async (showStatus = false) => {
@@ -700,7 +752,17 @@ export function App() {
       try {
         await serviceTick();
       } catch (error) {
-        setStatus(error instanceof Error ? error.message : "Falha no servico.");
+        const message = errorMessage(error, "Falha no servico.");
+        setStatus(message);
+        const now = Date.now();
+        if (now - lastServiceErrorLogAt.current > 60000) {
+          lastServiceErrorLogAt.current = now;
+          recordLocalLog("error", "Falha no polling/heartbeat do servico.", {
+            error: message,
+            agentId: config.agentId,
+            serverUrl: config.serverUrl,
+          });
+        }
         serviceNextPollMs.current = IDLE_SERVICE_POLL_MS;
       } finally {
         serviceTicking.current = false;
@@ -713,7 +775,7 @@ export function App() {
       cancelled = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [isEnrolled, serviceTick]);
+  }, [config.agentId, config.serverUrl, isEnrolled, recordLocalLog, serviceTick]);
 
   useEffect(() => {
     if (!isEnrolled || !config.token || !config.agentId) return;
@@ -729,10 +791,15 @@ export function App() {
         if (cancelled) return;
         if (serviceTicking.current) return;
         serviceTicking.current = true;
-        serviceTick()
-          .catch((error) => {
-            setStatus(error instanceof Error ? error.message : "Falha ao processar evento Realtime.");
-          })
+          serviceTick()
+            .catch((error) => {
+              const message = errorMessage(error, "Falha ao processar evento Realtime.");
+              setStatus(message);
+              recordLocalLog("error", "Falha ao processar evento Realtime.", {
+                error: message,
+                agentId: config.agentId,
+              });
+            })
           .finally(() => {
             serviceTicking.current = false;
           });
@@ -780,10 +847,19 @@ export function App() {
             if (status === "SUBSCRIBED") {
               realtimeConnected.current = true;
               setStatus("Realtime conectado. Polling ficou como fallback.");
+              recordLocalLog("info", "Realtime conectado.", {
+                agentId: realtime.agentId,
+                tenantId: realtime.tenantId,
+              });
             }
-            if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+            if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
               realtimeConnected.current = false;
-              setStatus("Realtime indisponivel. Usando polling de fallback.");
+              setStatus("Realtime indisponivel. Captura continua por polling de fallback.");
+              recordLocalLog("warn", "Realtime indisponivel; polling de fallback ativo.", {
+                status,
+                agentId: realtime.agentId,
+              });
+              wakeService();
             }
           });
 
@@ -794,8 +870,14 @@ export function App() {
         refreshTimer = window.setTimeout(connect, refreshDelay);
       } catch (error) {
         if (cancelled) return;
-        setStatus(error instanceof Error ? error.message : "Falha ao conectar Realtime.");
+        const message = errorMessage(error, "Falha ao conectar Realtime.");
+        setStatus(message);
         realtimeConnected.current = false;
+        recordLocalLog("error", "Falha ao conectar Realtime.", {
+          error: message,
+          agentId: config.agentId,
+          serverUrl: config.serverUrl,
+        });
         refreshTimer = window.setTimeout(connect, IDLE_SERVICE_POLL_MS);
       }
     };
@@ -812,7 +894,7 @@ export function App() {
       }
       realtimeConnected.current = false;
     };
-  }, [config.agentId, config.serverUrl, config.token, isEnrolled, serviceTick]);
+  }, [config.agentId, config.serverUrl, config.token, isEnrolled, recordLocalLog, serviceTick]);
 
   async function heartbeat() {
     setIsBusy(true);
@@ -1228,6 +1310,23 @@ export function App() {
           </div>
           <p className="tip">Use depois de escolher impressora/balanca. Isto vincula a estacao ao ponto Receiving no KyberFrigo.</p>
           <pre>{status}</pre>
+          <div className="row action-row">
+            <button className="secondary" onClick={() => void refreshLocalLogs()} disabled={isBusy}>Atualizar logs</button>
+          </div>
+          <div className="local-log-list">
+            {localLogs.length === 0 ? (
+              <p className="muted">Sem logs locais ainda.</p>
+            ) : localLogs.map((log) => (
+              <div className={`local-log-row ${log.level}`} key={log.id}>
+                <div className="row spread">
+                  <strong>{log.level.toUpperCase()}</strong>
+                  <span>{log.createdAt}</span>
+                </div>
+                <p>{log.message}</p>
+                {log.context && <code>{log.context}</code>}
+              </div>
+            ))}
+          </div>
         </div>
 
         <div className="panel ai-panel">

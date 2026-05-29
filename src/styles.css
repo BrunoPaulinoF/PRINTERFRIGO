@@ -392,6 +392,51 @@ pre {
   margin-top: 12px;
 }
 
+.local-log-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  max-height: 280px;
+  overflow: auto;
+}
+
+.local-log-row {
+  border: 1px solid #dce3d8;
+  border-radius: 12px;
+  background: #f7faf6;
+  padding: 10px;
+}
+
+.local-log-row.error {
+  border-color: #f1b7b7;
+  background: #fff6f6;
+}
+
+.local-log-row.warn {
+  border-color: #f1d9a8;
+  background: #fffaf0;
+}
+
+.local-log-row strong,
+.local-log-row span {
+  font-size: 11px;
+}
+
+.local-log-row p {
+  margin: 7px 0 0;
+  color: #1f3327;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.local-log-row code {
+  display: block;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+  color: #5b675d;
+  font-size: 11px;
+}
+
 .lock-shell {
   min-height: 100vh;
   display: flex;

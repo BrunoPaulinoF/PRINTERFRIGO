@@ -124,6 +124,8 @@ pub fn run() {
             printing::list_printers,
             printing::test_print_zpl,
             printing::quick_reset_printers,
+            queue::list_local_logs,
+            queue::write_local_log,
         ])
         .run(tauri::generate_context!())
         .expect("erro ao executar PrinterFrigo");
