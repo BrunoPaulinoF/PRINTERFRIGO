@@ -1,10 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
-  AdminSession,
-  AdminStatus,
-  AiLocalSnapshot,
+  AutoConfigureResult,
   EnrollmentResult,
-  LocalToolResult,
   LocalLogEntry,
   PortInfo,
   PrinterConfig,
@@ -45,6 +42,10 @@ export function readScaleRaw(config: StationConfig["scale"]): Promise<string> {
   return invoke("read_scale_raw", { config });
 }
 
+export function autoConfigureScaleSerial(config: StationConfig["scale"]): Promise<AutoConfigureResult> {
+  return invoke("auto_configure_scale_serial", { config });
+}
+
 export function testPrintZpl(printer: PrinterConfig, zpl: string): Promise<string> {
   return invoke("test_print_zpl", { printer, zpl });
 }
@@ -83,32 +84,8 @@ export function reportPrintJob(
   return invoke("report_print_job", { config, request });
 }
 
-export function adminLogin(password: string): Promise<AdminSession> {
-  return invoke("admin_login", { password });
-}
-
-export function adminLogout(token: string): Promise<void> {
-  return invoke("admin_logout", { token });
-}
-
-export function adminStatus(token?: string): Promise<AdminStatus> {
-  return invoke("admin_status", { token });
-}
-
 export function ensureWindowsAutostart(): Promise<string> {
   return invoke("ensure_windows_autostart");
-}
-
-export function aiCollectSnapshot(token: string, draftConfig: StationConfig): Promise<AiLocalSnapshot> {
-  return invoke("ai_collect_snapshot", { token, draftConfig });
-}
-
-export function aiRunLocalTool(token: string, tool: string, args: Record<string, unknown> = {}): Promise<LocalToolResult> {
-  return invoke("ai_run_local_tool", { token, request: { tool, args } });
-}
-
-export function aiSaveStationConfig(token: string, config: StationConfig): Promise<void> {
-  return invoke("ai_save_station_config", { token, config });
 }
 
 export function writeLocalLog(level: string, message: string, context?: Record<string, unknown>): Promise<void> {

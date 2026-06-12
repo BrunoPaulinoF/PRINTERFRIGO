@@ -2925,7 +2925,7 @@ dependencies = [
 
 [[package]]
 name = "printerfrigo"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "chrono",
  "dirs",
@@ -2935,7 +2935,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serialport",
- "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",

@@ -244,8 +244,62 @@ h2 {
   grid-column: span 6;
 }
 
-.ai-panel {
-  grid-column: 1 / -1;
+.auto-config {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #f3f7f4;
+  border: 1px solid #dce3d8;
+  color: #1f3327;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.auto-config.ok {
+  background: #ecf6ef;
+  border-color: #b8d8c1;
+}
+
+.auto-config.fail {
+  background: #fff5f3;
+  border-color: #f1b7b7;
+  color: #7a2018;
+}
+
+.auto-config-message {
+  margin: 0;
+  font-size: 13px;
+}
+
+.auto-config-weight {
+  margin: 0;
+  font-size: 15px;
+}
+
+.auto-config-causes ul {
+  margin: 6px 0 0 18px;
+  padding: 0;
+  font-size: 13px;
+}
+
+.auto-config-toggle {
+  align-self: flex-start;
+  font-size: 12px;
+  padding: 4px 10px;
+}
+
+.auto-config-attempts {
+  margin: 0;
+  font-size: 11px;
+  background: #102818;
+  color: #d5efd8;
+  border-radius: 8px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  white-space: pre;
+  max-height: 240px;
+  overflow-y: auto;
 }
 
 .section-kicker {
@@ -370,26 +424,6 @@ pre {
   color: #cdeed8;
   padding: 12px;
   white-space: pre-wrap;
-}
-
-.ai-reply {
-  background: #f3f7f4;
-  color: #1f3327;
-  border: 1px solid #dce3d8;
-}
-
-.ai-error {
-  min-height: auto;
-  background: #fff1f1;
-  color: #8a1f1f;
-  border: 1px solid #f1b7b7;
-}
-
-.action-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 12px;
 }
 
 .local-log-list {
@@ -615,8 +649,7 @@ pre {
   .onboarding-panel,
   .scale-panel,
   .printer-panel,
-  .service-panel,
-  .ai-panel {
+  .service-panel {
     grid-column: auto;
   }
 

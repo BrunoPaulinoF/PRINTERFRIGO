@@ -1,13 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { createClient } from "@supabase/supabase-js";
-import { Bot, CheckCircle2, KeyRound, Lock, PlugZap, Printer, RefreshCw, Save, Scale, ShieldCheck, Unlock, WifiOff, Wrench, Zap } from "lucide-react";
+import { CheckCircle2, Lock, PlugZap, Printer, RefreshCw, Save, Scale, ShieldCheck, Unlock, Wand2, WifiOff, Zap } from "lucide-react";
 import logoUrl from "./assets/printerfrigo-logo.svg";
 import {
-  adminLogin,
-  aiCollectSnapshot,
-  aiRunLocalTool,
-  aiSaveStationConfig,
+  autoConfigureScaleSerial,
   enrollAgent,
   ensureWindowsAutostart,
   fetchRealtimeToken,
@@ -26,9 +23,9 @@ import {
   testScaleParse,
   writeLocalLog,
 } from "./api";
-import type { AiProposedAction, LocalLogEntry, PortInfo, PrinterConfig, PrinterInfo, ScaleConfig, StationConfig } from "./types";
+import type { AutoConfigureResult, LocalLogEntry, PortInfo, PrinterConfig, PrinterInfo, ScaleConfig, StationConfig } from "./types";
 
-const BUILD_VERSION = "0.4.1";
+const BUILD_VERSION = "0.5.0";
 const STATION_PASSWORD_HASH = "412b800684ad737f0b892151ccfd8b45578a413d2607c8ff0a134aeeeffbf186";
 const STATION_PASSWORD_SALT = "printerfrigo-station-v1";
 
@@ -251,13 +248,6 @@ export function App() {
   const [rawFrame, setRawFrame] = useState<string | null>(null);
   const [status, setStatus] = useState("Carregando configuracao local...");
   const [isBusy, setIsBusy] = useState(false);
-  const [adminPassword, setAdminPassword] = useState("");
-  const [adminToken, setAdminToken] = useState<string | null>(null);
-  const [aiInput, setAiInput] = useState("Configure esta estacao para usar a impressora e a balanca conectadas, validando antes de salvar.");
-  const [aiReply, setAiReply] = useState("");
-  const [aiError, setAiError] = useState("");
-  const [aiActions, setAiActions] = useState<AiProposedAction[]>([]);
-  const [aiBusy, setAiBusy] = useState(false);
   const [stationUnlocked, setStationUnlocked] = useState(false);
   const [stationPassword, setStationPassword] = useState("");
   const [stationError, setStationError] = useState("");
@@ -265,6 +255,10 @@ export function App() {
   const [resetMessage, setResetMessage] = useState("");
   const [appVersion, setAppVersion] = useState(BUILD_VERSION);
   const [localLogs, setLocalLogs] = useState<LocalLogEntry[]>([]);
+  const [autoConfig, setAutoConfig] = useState<AutoConfigureResult | null>(null);
+  const [autoConfigBusy, setAutoConfigBusy] = useState(false);
+  const [autoConfigTarget, setAutoConfigTarget] = useState<number>(0);
+  const [autoConfigExpanded, setAutoConfigExpanded] = useState(false);
   const handledCommands = useRef(new Set<string>());
   const processingCommands = useRef(new Set<string>());
   const processingJobs = useRef(new Set<string>());
@@ -907,120 +901,58 @@ export function App() {
     }
   }
 
-  async function unlockAdmin() {
-    setIsBusy(true);
+  async function runAutoConfigure(index: number) {
+    const target = scales[index];
+    if (!target) return;
+    setAutoConfigBusy(true);
+    setAutoConfig(null);
+    setAutoConfigTarget(index);
+    setAutoConfigExpanded(false);
+    setRawFrame(null);
+    setStatus("Auto-configurando balanca. Testando serial, comandos e parsers...");
     try {
-      const session = await adminLogin(adminPassword);
-      setAdminToken(session.token);
-      setAdminPassword("");
-      setStatus("Area Admin IA desbloqueada.");
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Falha ao desbloquear admin.");
-    } finally {
-      setIsBusy(false);
-    }
-  }
-
-  async function askAi() {
-    if (!adminToken) {
-      const message = "Desbloqueie a area Admin IA com a senha de admin antes de conversar com a IA.";
-      setAiError(message);
-      setAiReply("");
-      setAiActions([]);
-      setStatus(message);
-      return;
-    }
-    if (!config.token) {
-      const message = "Matricule o PrinterFrigo no KyberFrigo antes de usar a IA. Gere um codigo em Ajustes > Pontos de Pesagem e informe no onboarding.";
-      setAiError(message);
-      setAiReply("");
-      setAiActions([]);
-      setStatus(message);
-      return;
-    }
-    if (!aiInput.trim()) {
-      const message = "Digite o pedido para a IA antes de diagnosticar.";
-      setAiError(message);
-      setAiReply("");
-      setAiActions([]);
-      setStatus(message);
-      return;
-    }
-    setAiBusy(true);
-    setAiError("");
-    setAiReply("Consultando IA admin...");
-    setAiActions([]);
-    try {
-      const snapshot = await aiCollectSnapshot(adminToken, config);
-      const response = await fetch(`${config.serverUrl.replace(/\/$/, "")}/api/hardware/agent/ai/chat`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${config.token}`,
-        },
-        body: JSON.stringify({ message: aiInput, snapshot }),
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(payload.error ?? "Falha ao consultar IA.");
-      setAiReply(payload.reply ?? "");
-      setAiError("");
-      setAiActions(Array.isArray(payload.proposedActions) ? payload.proposedActions : []);
-      setStatus("IA gerou diagnostico e acoes propostas.");
-    } catch (error) {
-      const message = networkErrorMessage(error, config.serverUrl);
-      setAiError(message);
-      setAiReply("");
-      setAiActions([]);
-      setStatus(message);
-    } finally {
-      setAiBusy(false);
-    }
-  }
-
-  async function runAiAction(action: AiProposedAction) {
-    if (!adminToken) return;
-    if (action.requiresConfirmation !== false && !window.confirm(`Executar: ${action.label}?`)) return;
-    setAiBusy(true);
-    try {
-      const args = { ...(action.args ?? {}) };
-      if (["read_scale_once", "read_scale_raw", "diagnose_scale_serial"].includes(action.tool) && !args.scale) {
-        args.scale = config.scale;
-      }
-      if (["test_print_zpl"].includes(action.tool) && !args.printer) {
-        args.printer = config.printer;
-      }
-      if (action.tool === "save_station_config") {
-        const next = args.config as StationConfig | undefined;
-        if (!next) throw new Error("Acao sem config.");
-        await aiSaveStationConfig(adminToken, next);
-        setConfig(normalizeConfig(next));
-        setStatus("Configuracao local salva pela IA.");
-      } else if (action.tool === "apply_kyberfrigo_config") {
-        if (!config.token) throw new Error("Agente nao matriculado.");
-        const response = await fetch(`${config.serverUrl.replace(/\/$/, "")}/api/hardware/agent/configure`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${config.token}`,
-          },
-          body: JSON.stringify(args),
-        });
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(payload.error ?? "Falha ao aplicar no KyberFrigo.");
-        setStatus("Configuracao sincronizada com KyberFrigo.");
-      } else {
-        const result = await aiRunLocalTool(adminToken, action.tool, args);
+      const result = await autoConfigureScaleSerial(target);
+      setAutoConfig(result);
+      if (result.ok) {
+        setLastWeight(result.weightKg);
         setStatus(result.message);
-        setAiReply(`${result.message}\n\n${JSON.stringify(result.data, null, 2)}`);
+      } else {
+        setStatus(result.message);
       }
-      await refreshDevices();
     } catch (error) {
-      const message = networkErrorMessage(error, config.serverUrl);
-      setAiError(message);
+      const message = error instanceof Error ? error.message : "Falha na auto-configuracao.";
+      setAutoConfig({
+        ok: false,
+        message,
+        config: null,
+        weightKg: null,
+        frame: null,
+        parserLabel: null,
+        parserRegex: null,
+        attempts: [],
+        likelyCauses: [],
+        triedPorts: [target.port],
+      });
       setStatus(message);
     } finally {
-      setAiBusy(false);
+      setAutoConfigBusy(false);
     }
+  }
+
+  function applyAutoConfiguration() {
+    if (!autoConfig?.ok || !autoConfig.config) return;
+    const next = autoConfig.config;
+    updateScaleAt(autoConfigTarget, {
+      mode: next.mode ?? "serial",
+      port: next.port,
+      baudRate: next.baudRate,
+      dataBits: next.dataBits,
+      stopBits: next.stopBits,
+      parity: next.parity,
+      readCommand: next.readCommand ?? "",
+      parserRegex: next.parserRegex,
+    });
+    setStatus(`Configuracao aplicada: ${autoConfig.message}`);
   }
 
   async function unlockStation() {
@@ -1046,7 +978,6 @@ export function App() {
     setStationUnlocked(false);
     setStationPassword("");
     setStationError("");
-    setAdminToken(null);
     setResetMessage("");
   }
 
@@ -1239,11 +1170,47 @@ export function App() {
           <div className="test-strip">
             <button className="add-device-button secondary" onClick={addScale} disabled={isBusy}>Adicionar balanca</button>
             <button onClick={handleReadScale} disabled={isBusy || !config.scale.port}>Ler Balanca</button>
+            <button className="secondary" onClick={() => void runAutoConfigure(0)} disabled={autoConfigBusy || !config.scale.port}>
+              <Wand2 size={15} /> {autoConfigBusy && autoConfigTarget === 0 ? "Auto-configurando..." : "Auto configurar balanca"}
+            </button>
           </div>
           {rawFrame && (
             <div className="raw-frame">
               <label>Frame bruto recebido:</label>
               <pre>{rawFrame}</pre>
+            </div>
+          )}
+          {autoConfig && (
+            <div className={`auto-config ${autoConfig.ok ? "ok" : "fail"}`}>
+              <div className="row spread">
+                <strong>{autoConfig.ok ? "Configuracao encontrada" : "Nao foi possivel auto-configurar"}</strong>
+                {autoConfig.ok && <button className="secondary" onClick={applyAutoConfiguration}>Aplicar no formulario</button>}
+              </div>
+              <p className="auto-config-message">{autoConfig.message}</p>
+              {autoConfig.ok && autoConfig.weightKg !== null && (
+                <p className="auto-config-weight">Peso lido: <strong>{autoConfig.weightKg.toFixed(3)} kg</strong></p>
+              )}
+              {!autoConfig.ok && autoConfig.likelyCauses.length > 0 && (
+                <div className="auto-config-causes">
+                  <p className="muted">Possiveis causas:</p>
+                  <ul>
+                    {autoConfig.likelyCauses.map((cause) => <li key={cause}>{cause}</li>)}
+                  </ul>
+                </div>
+              )}
+              <button className="ghost auto-config-toggle" onClick={() => setAutoConfigExpanded((prev) => !prev)}>
+                {autoConfigExpanded ? "Ocultar detalhes" : `Ver detalhes (${autoConfig.attempts.length} tentativas)`}
+              </button>
+              {autoConfigExpanded && (
+                <pre className="auto-config-attempts">
+                  {autoConfig.attempts.slice(0, 30).map((attempt, idx) => {
+                    const cmdLabel = attempt.command === "" ? "<sem comando>" : attempt.command;
+                    const serialLabel = `${attempt.baudRate} ${attempt.dataBits}${attempt.parity[0]?.toUpperCase() ?? "N"}${attempt.stopBits}`;
+                    return `${idx + 1}. ${serialLabel} cmd=${cmdLabel} parser=${attempt.parserRegex || "-"} dados=${attempt.gotData} peso=${attempt.weightKg ?? "-"} ${attempt.reason ? `motivo=${attempt.reason}` : ""}${attempt.error ? ` erro=${attempt.error}` : ""}`;
+                  }).join("\n")}
+                  {autoConfig.attempts.length > 30 ? `\n... +${autoConfig.attempts.length - 30} tentativas` : ""}
+                </pre>
+              )}
             </div>
           )}
           <p className="reading">{lastWeight === null ? "--" : `${lastWeight.toFixed(3)} kg`}</p>
@@ -1327,51 +1294,6 @@ export function App() {
               </div>
             ))}
           </div>
-        </div>
-
-        <div className="panel ai-panel">
-          <h2><Bot size={18} /> Admin IA</h2>
-          {!adminToken ? (
-            <>
-              <FieldLabel help="Senha local para liberar ferramentas de diagnostico da estacao.">Senha admin</FieldLabel>
-              <div className="row">
-                <input
-                  type="password"
-                  value={adminPassword}
-                  onChange={(e) => setAdminPassword(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && adminPassword) void unlockAdmin();
-                  }}
-                />
-                <button onClick={unlockAdmin} disabled={isBusy || !adminPassword}>
-                  <KeyRound size={15} /> Entrar
-                </button>
-              </div>
-              <p className="muted">A IA fica bloqueada para usuario comum. A chave OpenAI permanece no backend KyberFrigo.</p>
-            </>
-          ) : (
-            <>
-              <FieldLabel help="Descreva o problema para a IA diagnosticar balanca, impressora ou configuracao.">Pedido para IA</FieldLabel>
-              <textarea value={aiInput} onChange={(e) => setAiInput(e.target.value)} />
-              <div className="row">
-                <button onClick={askAi} disabled={aiBusy || !aiInput.trim()}>
-                  <Bot size={15} /> Diagnosticar
-                </button>
-                <button className="secondary" onClick={() => setAdminToken(null)} disabled={aiBusy}>Bloquear</button>
-              </div>
-              {aiError && <pre className="ai-error">{aiError}</pre>}
-              {aiReply && <pre className="ai-reply">{aiReply}</pre>}
-              {aiActions.length > 0 && (
-                <div className="action-list">
-                  {aiActions.map((action) => (
-                    <button key={action.id} onClick={() => runAiAction(action)} disabled={aiBusy}>
-                      <Wrench size={15} /> {action.label}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
         </div>
       </section>
     </main>

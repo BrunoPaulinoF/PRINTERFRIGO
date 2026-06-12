@@ -1,8 +1,8 @@
-mod admin_ai;
 mod config;
 mod hardware;
 mod printing;
 mod queue;
+mod system;
 
 #[cfg(not(debug_assertions))]
 use std::time::Duration;
@@ -14,7 +14,6 @@ use tauri_plugin_updater::UpdaterExt;
 
 pub fn run() {
     tauri::Builder::default()
-        .manage(admin_ai::AdminState::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
@@ -103,15 +102,10 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            admin_ai::admin_login,
-            admin_ai::admin_logout,
-            admin_ai::admin_status,
-            admin_ai::ensure_windows_autostart,
-            admin_ai::ai_collect_snapshot,
-            admin_ai::ai_run_local_tool,
-            admin_ai::ai_save_station_config,
+            system::ensure_windows_autostart,
             config::load_config,
             config::save_config,
+            hardware::auto_configure_scale_serial,
             hardware::enroll_agent,
             hardware::fetch_realtime_token,
             hardware::heartbeat_once,

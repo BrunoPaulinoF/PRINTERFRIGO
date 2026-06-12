@@ -192,6 +192,342 @@ pub fn test_scale_parse(frame: String, parser_regex: String) -> Result<f64, Stri
     parse_weight_frame(&frame, &parser_regex)
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SerialCandidate {
+    pub baud_rate: u32,
+    pub data_bits: u8,
+    pub stop_bits: u8,
+    pub parity: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParserCandidate {
+    pub label: String,
+    pub regex: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoConfigureAttempt {
+    pub baud_rate: u32,
+    pub data_bits: u8,
+    pub stop_bits: u8,
+    pub parity: String,
+    pub command: String,
+    pub parser_regex: String,
+    pub got_data: bool,
+    pub weight_kg: Option<f64>,
+    pub reason: Option<String>,
+    pub frame: String,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoConfigureResult {
+    pub ok: bool,
+    pub message: String,
+    pub config: Option<ScaleConfig>,
+    pub weight_kg: Option<f64>,
+    pub frame: Option<String>,
+    pub parser_label: Option<String>,
+    pub parser_regex: Option<String>,
+    pub attempts: Vec<AutoConfigureAttempt>,
+    pub likely_causes: Vec<String>,
+    pub tried_ports: Vec<String>,
+}
+
+pub fn serial_candidates() -> Vec<SerialCandidate> {
+    let mut out: Vec<SerialCandidate> = Vec::new();
+    let primary_bauds = [9600_u32, 4800, 19200, 2400, 1200, 38400];
+    for baud in primary_bauds {
+        out.push(SerialCandidate {
+            baud_rate: baud,
+            data_bits: 8,
+            stop_bits: 1,
+            parity: "none".to_string(),
+        });
+    }
+    for baud in [9600_u32, 4800, 19200] {
+        for parity in ["even", "odd"] {
+            out.push(SerialCandidate {
+                baud_rate: baud,
+                data_bits: 7,
+                stop_bits: 1,
+                parity: parity.to_string(),
+            });
+        }
+    }
+    out
+}
+
+pub fn command_candidates(current: Option<&str>) -> Vec<String> {
+    let mut base: Vec<Option<String>> = vec![
+        None,
+        Some("ENQ".to_string()),
+        Some("hex:05".to_string()),
+        Some("hex:05 0D".to_string()),
+        Some("SI".to_string()),
+        Some("ctrl:SI".to_string()),
+        Some("hex:0F".to_string()),
+        Some("hex:0F 0D".to_string()),
+        Some("SO".to_string()),
+        Some("ctrl:SO".to_string()),
+        Some("P".to_string()),
+        Some("W".to_string()),
+        Some("S".to_string()),
+    ];
+    if let Some(cmd) = current {
+        let trimmed = cmd.trim().to_string();
+        if !trimmed.is_empty() {
+            base.insert(0, Some(trimmed));
+        }
+    }
+    let mut out: Vec<String> = base.into_iter().filter_map(|c| c).collect();
+    out.push(String::new());
+    out.dedup();
+    out
+}
+
+pub fn parser_candidates() -> Vec<ParserCandidate> {
+    vec![
+        ParserCandidate { label: "Toledo TI200/Prix (Protocol G)".to_string(), regex: "toledo:ti200".to_string() },
+        ParserCandidate { label: "Toledo TI200 P05 2 casas".to_string(), regex: "toledo:ti200:p05:2".to_string() },
+        ParserCandidate { label: "Toledo TI200 P05 3 casas".to_string(), regex: "toledo:ti200:p05:3".to_string() },
+        ParserCandidate { label: "Toledo 9091 (Protocol G)".to_string(), regex: "toledo:ti200:p05:3".to_string() },
+        ParserCandidate { label: "Generico kg".to_string(), regex: r"([-+]?\d+[\.,]?\d*)\s*kg?".to_string() },
+        ParserCandidate { label: "Numero com sinal".to_string(), regex: r"[-+]?\d{1,6}[\.,]\d{1,6}".to_string() },
+    ]
+}
+
+#[derive(Debug, Clone)]
+pub struct AttemptScore {
+    pub accepted: bool,
+    pub weight_kg: Option<f64>,
+    pub reason: Option<String>,
+}
+
+pub fn score_attempt(frame: &str, parser_regex: &str, expected: Option<f64>) -> AttemptScore {
+    if frame.is_empty() {
+        return AttemptScore { accepted: false, weight_kg: None, reason: Some("sem dados".to_string()) };
+    }
+    let upper = frame.to_ascii_uppercase();
+    if upper.contains("IIIII") || upper.contains("III,III") || upper.contains("III.III") {
+        return AttemptScore { accepted: false, weight_kg: None, reason: Some("instavel".to_string()) };
+    }
+    if upper.contains("SSSSS") || upper.contains("SSS,SSS") || upper.contains("SSS.SSS") {
+        return AttemptScore { accepted: false, weight_kg: None, reason: Some("sobrecarga".to_string()) };
+    }
+    if upper.contains("CCCCC") || upper.contains("CCC,CCC") || upper.contains("CCC.CCC") {
+        return AttemptScore { accepted: false, weight_kg: None, reason: Some("capturando zero".to_string()) };
+    }
+    if upper.contains("NNNNN") {
+        return AttemptScore { accepted: false, weight_kg: None, reason: Some("peso negativo".to_string()) };
+    }
+    match parse_weight_frame(frame, parser_regex) {
+        Ok(weight) => {
+            if let Some(prev) = expected {
+                if (weight - prev).abs() > 1.0 {
+                    return AttemptScore { accepted: false, weight_kg: Some(weight), reason: Some("leitura muito diferente da previa".to_string()) };
+                }
+            }
+            AttemptScore { accepted: true, weight_kg: Some(weight), reason: None }
+        }
+        Err(err) => AttemptScore { accepted: false, weight_kg: None, reason: Some(err) },
+    }
+}
+
+pub fn build_candidate_config(
+    base: &ScaleConfig,
+    serial: &SerialCandidate,
+    command: Option<&str>,
+    parser_regex: &str,
+) -> ScaleConfig {
+    let mut next = base.clone();
+    next.baud_rate = serial.baud_rate;
+    next.data_bits = serial.data_bits;
+    next.stop_bits = serial.stop_bits;
+    next.parity = serial.parity.clone();
+    next.read_command = command.filter(|c| !c.is_empty()).map(str::to_string);
+    next.parser_regex = parser_regex.to_string();
+    next
+}
+
+pub fn likely_causes_for_no_data() -> Vec<String> {
+    vec![
+        "Outro sistema pode estar usando esta porta serial no momento.".to_string(),
+        "Porta COM incorreta ou conversor USB-Serial diferente do esperado.".to_string(),
+        "Cabo RS232 com TX/RX invertido ou sem sinal de DTR/RTS.".to_string(),
+        "Saida serial da balanca desabilitada ou configurada para outro modo.".to_string(),
+        "Protocolo/comando fora da lista testada (consulte o manual do fabricante).".to_string(),
+    ]
+}
+
+fn read_scale_raw_with_serial(base: &ScaleConfig, serial: &SerialCandidate) -> Result<String, String> {
+    let mut next = base.clone();
+    next.baud_rate = serial.baud_rate;
+    next.data_bits = serial.data_bits;
+    next.stop_bits = serial.stop_bits;
+    next.parity = serial.parity.clone();
+    read_scale_raw(next)
+}
+
+fn read_scale_once_with_serial(base: &ScaleConfig, serial: &SerialCandidate, command: Option<&str>, parser_regex: &str) -> Result<f64, String> {
+    let next = build_candidate_config(base, serial, command, parser_regex);
+    read_scale_once(next)
+}
+
+#[tauri::command]
+pub fn auto_configure_scale_serial(
+    config: ScaleConfig,
+) -> Result<AutoConfigureResult, String> {
+    if config.mode.as_deref() == Some("tcp") {
+        return Err("Auto-configuracao exige balanca em modo Serial real.".to_string());
+    }
+    if config.mode.as_deref() == Some("simulated") {
+        return Err("Auto-configuracao nao se aplica a balanca simulada.".to_string());
+    }
+    if config.port.trim().is_empty() {
+        return Err("Selecione uma porta serial antes de iniciar a auto-configuracao.".to_string());
+    }
+
+    let mut attempts: Vec<AutoConfigureAttempt> = Vec::new();
+    let mut last_weight: Option<f64> = None;
+    let mut first_success: Option<(SerialCandidate, String, ParserCandidate, f64, String)> = None;
+
+    let serials = serial_candidates();
+    let commands = command_candidates(config.read_command.as_deref());
+    let parsers = parser_candidates();
+
+    for serial in &serials {
+        for cmd in &commands {
+            let frame_result = read_scale_raw_with_serial(&config, serial);
+            let frame = match &frame_result {
+                Ok(text) => text.clone(),
+                Err(err) => {
+                    attempts.push(AutoConfigureAttempt {
+                        baud_rate: serial.baud_rate,
+                        data_bits: serial.data_bits,
+                        stop_bits: serial.stop_bits,
+                        parity: serial.parity.clone(),
+                        command: cmd.clone(),
+                        parser_regex: String::new(),
+                        got_data: false,
+                        weight_kg: None,
+                        reason: Some("erro serial".to_string()),
+                        frame: String::new(),
+                        error: Some(err.clone()),
+                    });
+                    continue;
+                }
+            };
+            let got_data = !frame.starts_with("Nenhum dado recebido");
+            if !got_data {
+                attempts.push(AutoConfigureAttempt {
+                    baud_rate: serial.baud_rate,
+                    data_bits: serial.data_bits,
+                    stop_bits: serial.stop_bits,
+                    parity: serial.parity.clone(),
+                    command: cmd.clone(),
+                    parser_regex: String::new(),
+                    got_data: false,
+                    weight_kg: None,
+                    reason: Some("timeout".to_string()),
+                    frame,
+                    error: None,
+                });
+                continue;
+            }
+            for parser in &parsers {
+                let score = score_attempt(&frame, &parser.regex, last_weight);
+                attempts.push(AutoConfigureAttempt {
+                    baud_rate: serial.baud_rate,
+                    data_bits: serial.data_bits,
+                    stop_bits: serial.stop_bits,
+                    parity: serial.parity.clone(),
+                    command: cmd.clone(),
+                    parser_regex: parser.regex.clone(),
+                    got_data: true,
+                    weight_kg: score.weight_kg,
+                    reason: score.reason.clone(),
+                    frame: frame.clone(),
+                    error: None,
+                });
+                if score.accepted {
+                    if let Some(weight) = score.weight_kg {
+                        if first_success.is_none() {
+                            first_success = Some((serial.clone(), cmd.clone(), parser.clone(), weight, frame.clone()));
+                            last_weight = Some(weight);
+                            break;
+                        }
+                    }
+                }
+            }
+            if first_success.is_some() {
+                break;
+            }
+        }
+        if first_success.is_some() {
+            break;
+        }
+    }
+
+    if let Some((serial, cmd, parser, weight, frame)) = first_success {
+        let mut confirmed_weight = weight;
+        let mut stable_readings = 1_u32;
+        for _ in 0..1 {
+            match read_scale_once_with_serial(&config, &serial, Some(&cmd), &parser.regex) {
+                Ok(next) => {
+                    if (next - confirmed_weight).abs() <= 0.5 {
+                        stable_readings += 1;
+                        confirmed_weight = next;
+                    } else {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        let final_config = build_candidate_config(&config, &serial, Some(&cmd), &parser.regex);
+        return Ok(AutoConfigureResult {
+            ok: true,
+            message: format!(
+                "Balanca configurada em {} {} {}{}1 com comando {} e parser {} ({} leituras estaveis).",
+                serial.baud_rate,
+                serial.data_bits,
+                serial.parity.chars().next().map(|c| c.to_ascii_uppercase().to_string()).unwrap_or_else(|| "N".to_string()),
+                serial.stop_bits,
+                if cmd.is_empty() { "<sem comando>".to_string() } else { cmd.clone() },
+                parser.label,
+                stable_readings
+            ),
+            config: Some(final_config),
+            weight_kg: Some(confirmed_weight),
+            frame: Some(frame),
+            parser_label: Some(parser.label),
+            parser_regex: Some(parser.regex),
+            attempts,
+            likely_causes: Vec::new(),
+            tried_ports: vec![config.port.clone()],
+        });
+    }
+
+    Ok(AutoConfigureResult {
+        ok: false,
+        message: "Nenhuma combinacao recebeu dados da balanca.".to_string(),
+        config: None,
+        weight_kg: None,
+        frame: None,
+        parser_label: None,
+        parser_regex: None,
+        attempts,
+        likely_causes: likely_causes_for_no_data(),
+        tried_ports: vec![config.port.clone()],
+    })
+}
+
 #[tauri::command]
 pub fn read_scale_once(config: ScaleConfig) -> Result<f64, String> {
     if config.mode.as_deref() == Some("simulated") {
@@ -767,5 +1103,133 @@ mod tests {
         };
         let weight = read_scale_once(config).unwrap();
         assert!((weight - 12.345).abs() < 0.0001);
+    }
+
+    #[test]
+    fn serial_candidates_include_8n1_at_9600_and_7e1() {
+        let candidates = serial_candidates();
+        assert!(candidates.iter().any(|c| c.baud_rate == 9600 && c.data_bits == 8 && c.stop_bits == 1 && c.parity == "none"));
+        assert!(candidates.iter().any(|c| c.data_bits == 7 && c.parity == "even" && c.stop_bits == 1));
+        assert!(candidates.iter().any(|c| c.baud_rate == 4800));
+        let mut seen = std::collections::HashSet::new();
+        for c in &candidates {
+            let key = (c.baud_rate, c.data_bits, c.stop_bits, c.parity.clone());
+            assert!(seen.insert(key.clone()), "serial_candidates tem duplicado: {:?}", key);
+        }
+    }
+
+    #[test]
+    fn command_candidates_prioritize_current_command() {
+        let cmds = command_candidates(Some("P"));
+        assert_eq!(cmds.first().map(String::as_str), Some("P"));
+        assert!(cmds.contains(&"ENQ".to_string()));
+        assert!(cmds.iter().any(|c| c.is_empty()));
+    }
+
+    #[test]
+    fn command_candidates_dedup_with_current_command() {
+        let cmds = command_candidates(Some("ENQ"));
+        let count = cmds.iter().filter(|c| c.as_str() == "ENQ").count();
+        assert_eq!(count, 1, "ENQ duplicado removido: {:?}", cmds);
+    }
+
+    #[test]
+    fn parser_candidates_cover_ti200_p07_p05_9091_and_generic() {
+        let parsers: Vec<String> = parser_candidates().into_iter().map(|p| p.regex).collect();
+        assert!(parsers.iter().any(|p| p == "toledo:ti200"));
+        assert!(parsers.iter().any(|p| p == "toledo:ti200:p05:2"));
+        assert!(parsers.iter().any(|p| p == "toledo:ti200:p05:3"));
+        assert!(parsers.iter().any(|p| p == r"([-+]?\d+[\.,]?\d*)\s*kg?"));
+    }
+
+    #[test]
+    fn score_attempt_rejects_unstable_and_empty_frames() {
+        let unstable = score_attempt("\u{02}+III,III\u{03}", "toledo:ti200", None);
+        assert_eq!(unstable.reason.as_deref(), Some("instavel"));
+        assert!(!unstable.accepted);
+        let empty = score_attempt("", "toledo:ti200", None);
+        assert!(!empty.accepted);
+    }
+
+    #[test]
+    fn score_attempt_accepts_ti200_p07_with_consistent_readings() {
+        let s1 = score_attempt("\u{02}+012,345\u{03}", "toledo:ti200", Some(12.345));
+        assert!(s1.accepted, "score_attempt deveria aceitar frame TI200 P07: {:?}", s1);
+        assert_eq!(s1.weight_kg, Some(12.345));
+    }
+
+    #[test]
+    fn score_attempt_accepts_p05_with_configured_decimals() {
+        let s = score_attempt("\u{02}00114\u{03}", "toledo:ti200:p05:2", None);
+        assert!(s.accepted, "P05 com decimais deveria passar: {:?}", s);
+        assert!((s.weight_kg.unwrap() - 1.14).abs() < 0.0001);
+    }
+
+    #[test]
+    fn score_attempt_accepts_status_12_digit_frame() {
+        let s = score_attempt("+q 000238000001", "toledo:ti200", None);
+        assert!(s.accepted);
+        assert!((s.weight_kg.unwrap() - 23.8).abs() < 0.0001);
+    }
+
+    #[test]
+    fn score_attempt_accepts_generic_kg_frame() {
+        let s = score_attempt("ST,GS,+0012.345kg", r"([-+]?\d+[\.,]?\d*)\s*kg?", None);
+        assert!(s.accepted, "frame kg generico deveria passar: {:?}", s);
+        assert!((s.weight_kg.unwrap() - 12.345).abs() < 0.0001);
+    }
+
+    #[test]
+    fn score_attempt_rejects_frame_with_way_off_reading() {
+        let s = score_attempt("\u{02}+012,345\u{03}", "toledo:ti200", Some(99.999));
+        assert!(!s.accepted, "leitura muito diferente da previa nao pode ser aceita: {:?}", s);
+    }
+
+    #[test]
+    fn score_attempt_handles_status_and_plain_12_digit() {
+        let plain = score_attempt("+000238000001", "toledo:ti200", None);
+        let status = score_attempt("+q 000238000001", "toledo:ti200", None);
+        assert!(plain.accepted);
+        assert!(status.accepted);
+        assert!((status.weight_kg.unwrap() - 23.8).abs() < 0.0001);
+        assert!((plain.weight_kg.unwrap() - 2380.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn build_candidate_config_overrides_serial_and_command() {
+        let base = ScaleConfig {
+            mode: Some("serial".to_string()),
+            port: "COM12".to_string(),
+            host: None,
+            simulated_weight_kg: None,
+            baud_rate: 9600,
+            data_bits: 8,
+            stop_bits: 1,
+            parity: "none".to_string(),
+            read_command: None,
+            parser_regex: "toledo:ti200".to_string(),
+            stable_window: 4,
+            stable_threshold_kg: 0.02,
+            stable_ms: 1200,
+            min_weight_kg: 1.0,
+            cooldown_ms: 1500,
+            zero_threshold_kg: 0.25,
+        };
+        let next = build_candidate_config(&base, &SerialCandidate { baud_rate: 4800, data_bits: 7, stop_bits: 1, parity: "even".to_string() }, Some("ENQ"), "toledo:ti200:p05:2");
+        assert_eq!(next.baud_rate, 4800);
+        assert_eq!(next.data_bits, 7);
+        assert_eq!(next.stop_bits, 1);
+        assert_eq!(next.parity, "even");
+        assert_eq!(next.read_command.as_deref(), Some("ENQ"));
+        assert_eq!(next.parser_regex, "toledo:ti200:p05:2");
+        assert_eq!(next.port, "COM12");
+    }
+
+    #[test]
+    fn likley_causes_for_no_data_lists_commonly_known_reasons() {
+        let causes = likely_causes_for_no_data();
+        assert!(causes.iter().any(|c| c.contains("COM")));
+        assert!(causes.iter().any(|c| c.to_lowercase().contains("outro sistema")));
+        assert!(causes.iter().any(|c| c.to_lowercase().contains("cabo")));
     }
 }

@@ -68,48 +68,37 @@ export type PortInfo = {
   kind: string;
 };
 
-export type AdminSession = {
-  token: string;
-  expiresAtMs: number;
-};
-
-export type AdminStatus = {
-  authenticated: boolean;
-  expiresAtMs?: number;
-};
-
-export type AiLocalSnapshot = {
-  savedConfig?: StationConfig | null;
-  draftConfig?: StationConfig | null;
-  serialPorts: unknown;
-  printers: unknown;
-  printJobs: unknown;
-  services: unknown;
-};
-
-export type AiProposedAction = {
-  id: string;
-  label: string;
-  tool: string;
-  args?: Record<string, unknown>;
-  requiresConfirmation?: boolean;
-};
-
-export type AiChatResponse = {
-  reply: string;
-  proposedActions: AiProposedAction[];
-};
-
-export type LocalToolResult = {
-  ok: boolean;
-  message: string;
-  data: unknown;
-};
-
 export type LocalLogEntry = {
   id: number;
   level: string;
   message: string;
   context?: string | null;
   createdAt: string;
+};
+
+export type AutoConfigureAttempt = {
+  baudRate: number;
+  dataBits: number;
+  stopBits: number;
+  parity: string;
+  command: string;
+  parserRegex: string;
+  gotData: boolean;
+  weightKg: number | null;
+  reason: string | null;
+  frame: string;
+  error: string | null;
+};
+
+export type AutoConfigureResult = {
+  ok: boolean;
+  message: string;
+  config: ScaleConfig | null;
+  weightKg: number | null;
+  frame: string | null;
+  parserLabel: string | null;
+  parserRegex: string | null;
+  attempts: AutoConfigureAttempt[];
+  likelyCauses: string[];
+  triedPorts: string[];
 };
