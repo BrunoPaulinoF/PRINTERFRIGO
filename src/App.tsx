@@ -9,6 +9,10 @@ import {
   ensureWindowsAutostart,
   fetchRealtimeToken,
   heartbeatOnce,
+  deletePendingCaptureSubmit,
+  deletePendingPrintJobReport,
+  listPendingCaptureSubmits,
+  listPendingPrintJobReports,
   listLocalLogs,
   listPrinters,
   listSerialPorts,
@@ -17,13 +21,15 @@ import {
   readScaleOnce,
   readScaleRaw,
   reportPrintJob as reportPrintJobApi,
+  savePendingCaptureSubmit,
+  savePendingPrintJobReport,
   saveConfig,
   submitCapture as submitCaptureApi,
   testPrintZpl,
   testScaleParse,
   writeLocalLog,
 } from "./api";
-import type { AutoConfigureResult, LocalLogEntry, PortInfo, PrinterConfig, PrinterInfo, ScaleConfig, StationConfig } from "./types";
+import type { AutoConfigureResult, LocalLogEntry, PendingCaptureSubmit, PendingPrintJobReport, PortInfo, PrinterConfig, PrinterInfo, ScaleConfig, StationConfig } from "./types";
 
 const BUILD_VERSION = "0.5.0";
 const STATION_PASSWORD_HASH = "412b800684ad737f0b892151ccfd8b45578a413d2607c8ff0a134aeeeffbf186";
@@ -505,6 +511,9 @@ export function App() {
     if (!config.token) return;
     await reportPrintJobApi(config, { jobId, status: nextStatus, error })
       .then(() => {
+        return deletePendingPrintJobReport(jobId);
+      })
+      .then(() => {
         recordLocalLog(nextStatus === "FAILED" ? "warn" : "info", "Status de impressao enviado ao KyberFrigo.", {
           jobId,
           status: nextStatus,
@@ -519,6 +528,17 @@ export function App() {
         });
         throw reportError;
       });
+  }
+
+  async function flushPendingPrintReports(reports?: PendingPrintJobReport[]) {
+    const pending = reports ?? await listPendingPrintJobReports();
+    for (const report of pending) {
+      try {
+        await reportPrintJob(report.jobId, report.status, report.error ?? undefined);
+      } catch {
+        return;
+      }
+    }
   }
 
   async function syncReceivingConfig() {
@@ -589,7 +609,7 @@ export function App() {
   async function submitCapture(session: HardwareSession, weight: number, commandId: string) {
     if (!config.token) return;
     const captureId = `${session.id}-${commandId}`;
-    await submitCaptureApi(config, {
+    const request: PendingCaptureSubmit = {
       captureId,
       sessionId: session.id,
       pointId: session.point_id,
@@ -597,7 +617,12 @@ export function App() {
       grossWeight: weight,
       stable: true,
       payload: { context: session.context },
-    })
+    };
+    await savePendingCaptureSubmit(captureId, request);
+    await submitCaptureApi(config, request)
+      .then(() => {
+        return deletePendingCaptureSubmit(captureId);
+      })
       .then(() => {
         recordLocalLog("info", "Captura enviada ao KyberFrigo.", {
           captureId,
@@ -618,11 +643,32 @@ export function App() {
       });
   }
 
+  async function flushPendingCaptures() {
+    const pending = await listPendingCaptureSubmits();
+    for (const request of pending) {
+      try {
+        await submitCaptureApi(config, request);
+        await deletePendingCaptureSubmit(request.captureId);
+        recordLocalLog("info", "Captura pendente reenviada ao KyberFrigo.", {
+          captureId: request.captureId,
+          sessionId: request.sessionId,
+          flow: request.flow,
+        });
+      } catch {
+        return;
+      }
+    }
+  }
+
   const serviceTick = useCallback(async (showStatus = false) => {
     if (!config.token) return;
     const result = await heartbeatOnce(config) as HeartbeatResult;
     const printJobs = result.printJobs ?? [];
     const sessions = result.sessions ?? [];
+    const pendingPrintReports = await listPendingPrintJobReports().catch(() => [] as PendingPrintJobReport[]);
+    const pendingPrintReportsByJobId = new Map(pendingPrintReports.map((report) => [report.jobId, report]));
+    await flushPendingPrintReports(pendingPrintReports);
+    await flushPendingCaptures();
     const serverNowMs = result.serverTime ? new Date(result.serverTime).getTime() : Date.now();
     const requestedPollMs = typeof result.nextPollMs === "number"
       ? result.nextPollMs
@@ -638,19 +684,27 @@ export function App() {
       if (processingJobs.current.has(job.id)) continue;
       processingJobs.current.add(job.id);
       try {
+        const pendingReport = pendingPrintReportsByJobId.get(job.id);
+        if (pendingReport?.status === "PRINTED") {
+          await reportPrintJob(job.id, "PRINTED", pendingReport.error ?? undefined);
+          continue;
+        }
         const zpl = job.payload?.zpl;
         if (!zpl) throw new Error("Job sem payload ZPL.");
         if (!printedJobs.current.has(job.id)) {
           await testPrintZpl(printerForLocalId(job.printer_local_id), zpl);
           printedJobs.current.add(job.id);
         }
+        await savePendingPrintJobReport(job.id, "PRINTED");
         await reportPrintJob(job.id, "PRINTED");
         printedJobs.current.delete(job.id);
       } catch (error) {
         if (printedJobs.current.has(job.id)) {
           setStatus(error instanceof Error ? `Etiqueta impressa, mas falhou ao confirmar: ${error.message}` : "Etiqueta impressa, mas falhou ao confirmar.");
         } else {
-          await reportPrintJob(job.id, "FAILED", error instanceof Error ? error.message : "Falha ao imprimir.");
+          const printError = error instanceof Error ? error.message : "Falha ao imprimir.";
+          await savePendingPrintJobReport(job.id, "FAILED", printError);
+          await reportPrintJob(job.id, "FAILED", printError);
         }
       } finally {
         processingJobs.current.delete(job.id);

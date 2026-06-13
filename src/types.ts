@@ -76,6 +76,22 @@ export type LocalLogEntry = {
   createdAt: string;
 };
 
+export type PendingPrintJobReport = {
+  jobId: string;
+  status: "PRINTED" | "FAILED";
+  error?: string | null;
+};
+
+export type PendingCaptureSubmit = {
+  captureId: string;
+  sessionId: string;
+  pointId: string;
+  flow: "RECEIVING" | "OP_OUTPUT";
+  grossWeight: number;
+  stable: boolean;
+  payload: Record<string, unknown>;
+};
+
 export type AutoConfigureAttempt = {
   baudRate: number;
   dataBits: number;

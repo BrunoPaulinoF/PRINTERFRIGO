@@ -3,6 +3,8 @@ import type {
   AutoConfigureResult,
   EnrollmentResult,
   LocalLogEntry,
+  PendingCaptureSubmit,
+  PendingPrintJobReport,
   PortInfo,
   PrinterConfig,
   PrinterInfo,
@@ -94,4 +96,28 @@ export function writeLocalLog(level: string, message: string, context?: Record<s
 
 export function listLocalLogs(limit = 50): Promise<LocalLogEntry[]> {
   return invoke("list_local_logs", { limit });
+}
+
+export function savePendingPrintJobReport(jobId: string, status: "PRINTED" | "FAILED", error?: string): Promise<void> {
+  return invoke("save_pending_print_job_report", { jobId, status, error });
+}
+
+export function listPendingPrintJobReports(): Promise<PendingPrintJobReport[]> {
+  return invoke("list_pending_print_job_reports");
+}
+
+export function deletePendingPrintJobReport(jobId: string): Promise<void> {
+  return invoke("delete_pending_print_job_report", { jobId });
+}
+
+export function savePendingCaptureSubmit(captureId: string, request: PendingCaptureSubmit): Promise<void> {
+  return invoke("save_pending_capture_submit", { captureId, request });
+}
+
+export function listPendingCaptureSubmits(): Promise<PendingCaptureSubmit[]> {
+  return invoke("list_pending_capture_submits");
+}
+
+export function deletePendingCaptureSubmit(captureId: string): Promise<void> {
+  return invoke("delete_pending_capture_submit", { captureId });
 }

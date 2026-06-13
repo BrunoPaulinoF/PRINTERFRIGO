@@ -3,6 +3,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 const appPath = new URL("../src/App.tsx", import.meta.url);
+const apiPath = new URL("../src/api.ts", import.meta.url);
+const queuePath = new URL("../src-tauri/src/queue.rs", import.meta.url);
 
 test("automatic capture uses lease, cooldown, and weight-change rearm", async () => {
   const source = await readFile(appPath, "utf8");
@@ -34,6 +36,30 @@ test("print jobs can retry without duplicate local suppression", async () => {
   assert.ok(source.includes("printedJobs"), "print job loop must remember labels already printed while confirmation is pending");
   assert.ok(source.includes("printedJobs.current.has(job.id)"), "already printed jobs must be confirmed without reprinting");
   assert.equal(source.includes("handledJobs"), false, "failed jobs must not be permanently skipped in memory");
+});
+
+test("printed jobs are saved locally before remote acknowledgement", async () => {
+  const appSource = await readFile(appPath, "utf8");
+  const apiSource = await readFile(apiPath, "utf8");
+  const queueSource = await readFile(queuePath, "utf8");
+
+  assert.ok(apiSource.includes("savePendingPrintJobReport"), "frontend API must expose local pending print report storage");
+  assert.ok(queueSource.includes('"print_job_report"'), "SQLite queue must persist print-job reports");
+  assert.ok(appSource.includes("savePendingPrintJobReport(job.id, \"PRINTED\")"), "app must save PRINTED locally before reporting to Kyber");
+  assert.ok(appSource.includes("pendingPrintReportsByJobId"), "app must detect locally printed jobs returned by heartbeat");
+  assert.ok(appSource.includes("deletePendingPrintJobReport(jobId)"), "app must clear local print reports after Kyber accepts them");
+});
+
+test("captures are saved locally before remote submission", async () => {
+  const appSource = await readFile(appPath, "utf8");
+  const apiSource = await readFile(apiPath, "utf8");
+  const queueSource = await readFile(queuePath, "utf8");
+
+  assert.ok(apiSource.includes("savePendingCaptureSubmit"), "frontend API must expose local pending capture storage");
+  assert.ok(queueSource.includes('"capture_submit"'), "SQLite queue must persist capture submissions");
+  assert.ok(appSource.includes("savePendingCaptureSubmit(captureId"), "app must save capture locally before sending it to Kyber");
+  assert.ok(appSource.includes("flushPendingCaptures"), "app must retry locally saved captures when service ticks");
+  assert.ok(appSource.includes("deletePendingCaptureSubmit(captureId)"), "app must clear local capture after Kyber accepts it");
 });
 
 test("advanced automatic capture thresholds are configurable in the station UI", async () => {
