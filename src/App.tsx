@@ -31,7 +31,7 @@ import {
 } from "./api";
 import type { AutoConfigureResult, LocalLogEntry, PendingCaptureSubmit, PendingPrintJobReport, PortInfo, PrinterConfig, PrinterInfo, ScaleConfig, StationConfig } from "./types";
 
-const BUILD_VERSION = "0.5.0";
+const BUILD_VERSION = "0.5.2";
 const STATION_PASSWORD_HASH = "412b800684ad737f0b892151ccfd8b45578a413d2607c8ff0a134aeeeffbf186";
 const STATION_PASSWORD_SALT = "printerfrigo-station-v1";
 
