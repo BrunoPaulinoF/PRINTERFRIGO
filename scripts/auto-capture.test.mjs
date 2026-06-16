@@ -82,3 +82,27 @@ test("station fields include short operator help tooltips", async () => {
   assert.ok(source.includes('Cooldown ms</FieldLabel>'), "cooldown field must have operator help");
   assert.ok(source.includes('Zero kg</FieldLabel>'), "zero threshold field must have operator help");
 });
+
+test("auto capture rearms the last-captured weight before submit to avoid duplicate volumes on retry", async () => {
+  const source = await readFile(appPath, "utf8");
+
+  // The auto-capture loop must mark lastCapturedWeight/lastCapturedAt BEFORE
+  // awaiting submitCapture, otherwise a transient send failure (network/timeout)
+  // leaves the state clean and flushPendingCaptures re-submits the same piece
+  // with a brand-new captureId, creating a duplicate volume.
+  const loopMatch = source.match(/if \([\s\S]*?isStable\(state\.samples[\s\S]*?autoSessions\.current\.set\(session\.id, state\);/);
+  assert.ok(loopMatch, "auto-capture must keep the state update inside the per-session block");
+  const block = loopMatch[0];
+  const stateUpdateIndex = block.search(/state\.lastCapturedWeight\s*=\s*weight/);
+  const submitIndex = block.search(/await submitCapture\(session, weight, makeAutoCaptureKey\(\)\);/);
+  assert.ok(stateUpdateIndex >= 0, "auto-capture must update lastCapturedWeight inside the block");
+  assert.ok(submitIndex >= 0, "auto-capture must await submitCapture inside the block");
+  assert.ok(
+    stateUpdateIndex < submitIndex,
+    "lastCapturedWeight must be set before submitCapture so retry-via-pending-queue does not duplicate the volume",
+  );
+  assert.ok(
+    /try\s*\{[\s\S]*await submitCapture\(session, weight, makeAutoCaptureKey\(\)\);[\s\S]*\}\s*catch/.test(block),
+    "auto-capture must catch submitCapture errors so state stays consistent and flushPendingCaptures can retry",
+  );
+});

@@ -762,10 +762,24 @@ export function App() {
         state.samples.length >= Math.max(2, scale.stableWindow) &&
         isStable(state.samples, scale.stableThresholdKg)
       ) {
-        await submitCapture(session, weight, makeAutoCaptureKey());
+        // Marca o peso como capturado ANTES de tentar enviar. submitCapture
+        // salva a captura como pendente local e o flushPendingCaptures reenvia
+        // se o POST falhar. Sem isso, um envio inicial que falha (rede,
+        // timeout) deixa o state limpo e o proximo tick cria um volume
+        // duplicado para a mesma peca com captureId novo.
         state.lastCapturedAt = Date.now();
         state.lastCapturedWeight = weight;
         state.samples = [];
+        try {
+          await submitCapture(session, weight, makeAutoCaptureKey());
+        } catch (error) {
+          recordLocalLog("warn", "Captura automatica nao enviada; sera reenviada via fila local.", {
+            sessionId: session.id,
+            flow: session.flow,
+            weight,
+            error: errorMessage(error, "Falha ao enviar captura."),
+          });
+        }
       }
       autoSessions.current.set(session.id, state);
     }
