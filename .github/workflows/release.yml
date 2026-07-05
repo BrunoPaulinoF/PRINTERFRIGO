@@ -1,34 +1,105 @@
 name: Release
 
+# Publica automaticamente uma nova versao a cada merge na `main`.
+# O patch e incrementado, os 4 arquivos de versao sao bumpados e commitados de
+# volta, e o instalador Windows assinado + o manifesto de auto-update (latest.json)
+# sao gerados e publicados em GitHub Releases -- tudo no mesmo job, sem depender de
+# um trigger cruzado por tag (o GITHUB_TOKEN nao dispara outros workflows).
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
 
+# Serializa os releases: se dois merges acontecerem juntos, o segundo espera o
+# primeiro terminar e ja enxerga a tag/versao criada por ele.
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
 jobs:
-  build-windows:
+  release:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install frontend dependencies
+
+      - name: Calcular proxima versao (patch bump)
+        id: version
+        shell: bash
+        run: |
+          git fetch --tags --force
+          PKG=$(node -p "require('./package.json').version")
+          TAG=$(git tag -l 'v*' --sort=-v:refname | head -n1)
+          TAG=${TAG#v}
+          NEW=$(node -e '
+            const pick=(a,b)=>{const pa=a.split(".").map(Number),pb=b.split(".").map(Number);for(let i=0;i<3;i++){const x=pa[i]||0,y=pb[i]||0;if(x!==y)return x>y?a:b;}return a;};
+            let base=process.argv[1];
+            if(process.argv[2]) base=pick(process.argv[1],process.argv[2]);
+            const [x,y,z]=base.split(".").map(Number);
+            console.log(`${x}.${y}.${z+1}`);
+          ' "$PKG" "$TAG")
+          echo "new=$NEW" >> "$GITHUB_OUTPUT"
+          echo "Proxima versao: $NEW"
+
+      - name: Bump nos 4 arquivos de versao
+        shell: bash
+        env:
+          NEW: ${{ steps.version.outputs.new }}
+        run: |
+          npm version "$NEW" --no-git-tag-version --allow-same-version
+          node -e '
+            const fs=require("fs");const p="src-tauri/tauri.conf.json";
+            const j=JSON.parse(fs.readFileSync(p,"utf8"));j.version=process.env.NEW;
+            fs.writeFileSync(p, JSON.stringify(j,null,2)+"\n");
+          '
+          awk -v v="$NEW" '
+            /^\[/{inpkg=($0=="[package]")}
+            inpkg && /^version = / && !done {sub(/"[^"]*"/,"\"" v "\"");done=1}
+            {print}
+          ' src-tauri/Cargo.toml > src-tauri/Cargo.toml.tmp && mv src-tauri/Cargo.toml.tmp src-tauri/Cargo.toml
+          sed -i 's/const BUILD_VERSION = "[^"]*"/const BUILD_VERSION = "'"$NEW"'"/' src/App.tsx
+
+      - name: Commit, push e tag da nova versao
+        shell: bash
+        env:
+          NEW: ${{ steps.version.outputs.new }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "chore(release): v$NEW [skip ci]"
+          # push via GITHUB_TOKEN nao redispara este workflow (protecao contra loop);
+          # o [skip ci] e uma garantia extra.
+          git push origin HEAD:main
+          git tag "v$NEW"
+          git push origin "v$NEW"
+
+      - name: Instalar dependencias do frontend
         run: npm ci
-      - name: Build and publish signed Tauri release
+
+      - name: Build e publicacao da release assinada (Tauri)
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "PRINTERFRIGO ${{ github.ref_name }}"
+          tagName: v${{ steps.version.outputs.new }}
+          releaseName: "PRINTERFRIGO v${{ steps.version.outputs.new }}"
           releaseBody: "Instaladores Windows e manifesto de auto-update assinado."
           releaseDraft: false
           prerelease: false

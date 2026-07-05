@@ -4,13 +4,53 @@ mod printing;
 mod queue;
 mod system;
 
-#[cfg(not(debug_assertions))]
-use std::time::Duration;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Manager, WindowEvent};
-#[cfg(not(debug_assertions))]
 use tauri_plugin_updater::UpdaterExt;
+
+/// Resultado da checagem manual de atualizacao exposta para o frontend.
+#[derive(serde::Serialize)]
+struct UpdateStatus {
+    available: bool,
+    version: Option<String>,
+    current: String,
+}
+
+/// Apenas verifica se ha atualizacao; NAO instala nada.
+#[tauri::command]
+async fn check_update(app: tauri::AppHandle) -> Result<UpdateStatus, String> {
+    let current = app.package_info().version.to_string();
+    let updater = app.updater().map_err(|err| err.to_string())?;
+    match updater.check().await {
+        Ok(Some(update)) => Ok(UpdateStatus {
+            available: true,
+            version: Some(update.version.clone()),
+            current,
+        }),
+        Ok(None) => Ok(UpdateStatus {
+            available: false,
+            version: None,
+            current,
+        }),
+        Err(err) => Err(err.to_string()),
+    }
+}
+
+/// Baixa e instala a atualizacao (se houver) e reinicia o app.
+/// So e chamado depois de o usuario confirmar no botao.
+#[tauri::command]
+async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+    let updater = app.updater().map_err(|err| err.to_string())?;
+    if let Some(update) = updater.check().await.map_err(|err| err.to_string())? {
+        update
+            .download_and_install(|_, _| {}, || {})
+            .await
+            .map_err(|err| err.to_string())?;
+        app.restart();
+    }
+    Ok(())
+}
 
 pub fn run() {
     tauri::Builder::default()
@@ -75,29 +115,8 @@ pub fn run() {
                 }
             }
 
-            #[cfg(not(debug_assertions))]
-            {
-                let handle = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(Duration::from_secs(10)).await;
-                    match handle.updater() {
-                        Ok(updater) => match updater.check().await {
-                            Ok(Some(update)) => {
-                                if let Err(err) = update.download_and_install(|_, _| {}, || {}).await {
-                                    let _ = queue::log("error", &format!("updater: falha ao instalar: {err}"), None);
-                                }
-                            }
-                            Ok(None) => {}
-                            Err(err) => {
-                                let _ = queue::log("error", &format!("updater: falha ao checar: {err}"), None);
-                            }
-                        },
-                        Err(err) => {
-                            let _ = queue::log("error", &format!("updater: falha ao inicializar: {err}"), None);
-                        }
-                    }
-                });
-            }
+            // Atualizacao NAO e mais automatica: o usuario dispara manualmente
+            // pelos comandos check_update / install_update (botao na UI).
 
             Ok(())
         })
@@ -126,6 +145,8 @@ pub fn run() {
             printing::quick_reset_printers,
             queue::list_local_logs,
             queue::write_local_log,
+            check_update,
+            install_update,
         ])
         .run(tauri::generate_context!())
         .expect("erro ao executar PrinterFrigo");

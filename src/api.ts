@@ -98,6 +98,20 @@ export function listLocalLogs(limit = 50): Promise<LocalLogEntry[]> {
   return invoke("list_local_logs", { limit });
 }
 
+export interface UpdateStatus {
+  available: boolean;
+  version: string | null;
+  current: string;
+}
+
+export function checkUpdate(): Promise<UpdateStatus> {
+  return invoke("check_update");
+}
+
+export function installUpdate(): Promise<void> {
+  return invoke("install_update");
+}
+
 export function savePendingPrintJobReport(jobId: string, status: "PRINTED" | "FAILED", error?: string): Promise<void> {
   return invoke("save_pending_print_job_report", { jobId, status, error });
 }

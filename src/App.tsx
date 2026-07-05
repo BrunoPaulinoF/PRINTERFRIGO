@@ -5,6 +5,8 @@ import { CheckCircle2, Lock, PlugZap, Printer, RefreshCw, Save, Scale, ShieldChe
 import logoUrl from "./assets/printerfrigo-logo.svg";
 import {
   autoConfigureScaleSerial,
+  checkUpdate,
+  installUpdate,
   enrollAgent,
   ensureWindowsAutostart,
   fetchRealtimeToken,
@@ -260,6 +262,8 @@ export function App() {
   const [resetBusy, setResetBusy] = useState(false);
   const [resetMessage, setResetMessage] = useState("");
   const [appVersion, setAppVersion] = useState(BUILD_VERSION);
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const [updatePrompt, setUpdatePrompt] = useState<{ version: string } | null>(null);
   const [localLogs, setLocalLogs] = useState<LocalLogEntry[]>([]);
   const [autoConfig, setAutoConfig] = useState<AutoConfigureResult | null>(null);
   const [autoConfigBusy, setAutoConfigBusy] = useState(false);
@@ -1049,6 +1053,40 @@ export function App() {
     setResetMessage("");
   }
 
+  async function handleCheckUpdate() {
+    setUpdateBusy(true);
+    setUpdatePrompt(null);
+    setStatus("Procurando atualizacao...");
+    try {
+      const result = await checkUpdate();
+      if (result.available && result.version) {
+        setUpdatePrompt({ version: result.version });
+        setStatus(`Nova versao ${result.version} disponivel.`);
+      } else {
+        setStatus(`Voce ja esta na versao mais recente (v${result.current}).`);
+      }
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Falha ao procurar atualizacao.");
+    } finally {
+      setUpdateBusy(false);
+    }
+  }
+
+  async function confirmUpdate() {
+    setUpdateBusy(true);
+    setStatus("Baixando e instalando atualizacao... O app sera reiniciado.");
+    try {
+      await installUpdate();
+      // Em caso de sucesso o app reinicia; se retornar, apenas informa.
+      setStatus("Atualizacao concluida.");
+      setUpdatePrompt(null);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Falha ao instalar atualizacao.");
+    } finally {
+      setUpdateBusy(false);
+    }
+  }
+
   async function resetPrinter() {
     setResetBusy(true);
     setResetMessage("Resetando impressora...");
@@ -1337,13 +1375,29 @@ export function App() {
 
         <div className="panel service-panel">
           <h2><PlugZap size={18} /> Servico</h2>
-          <p className="muted">Versao {appVersion}. O update Tauri fica bloqueado operacionalmente enquanto houver sessao ativa no KyberFrigo.</p>
+          <p className="muted">Versao {appVersion}. As atualizacoes sao manuais: use o botao abaixo para procurar e instalar uma nova versao.</p>
           <div className="actions">
             <button onClick={() => persist()} disabled={isBusy}><Save size={15} /> Salvar</button>
             <button className="secondary" onClick={heartbeat} disabled={!isEnrolled || isBusy}>Heartbeat</button>
             <button className="secondary" onClick={syncReceivingConfig} disabled={!isEnrolled || isBusy}>Sincronizar Receiving</button>
           </div>
           <p className="tip">Use depois de escolher impressora/balanca. Isto vincula a estacao ao ponto Receiving no KyberFrigo.</p>
+          <div className="actions action-row">
+            <button className="secondary" onClick={() => void handleCheckUpdate()} disabled={updateBusy}>
+              <RefreshCw size={15} /> {updateBusy ? "Verificando..." : "Procurar atualizacao"}
+            </button>
+          </div>
+          {updatePrompt && (
+            <div className="auto-config">
+              <p className="auto-config-message">Nova versao {updatePrompt.version} disponivel. Deseja atualizar agora? O app sera reiniciado.</p>
+              <div className="row">
+                <button onClick={() => void confirmUpdate()} disabled={updateBusy}>
+                  <Zap size={15} /> Sim, atualizar
+                </button>
+                <button className="secondary" onClick={() => setUpdatePrompt(null)} disabled={updateBusy}>Agora nao</button>
+              </div>
+            </div>
+          )}
           <pre>{status}</pre>
           <div className="row action-row">
             <button className="secondary" onClick={() => void refreshLocalLogs()} disabled={isBusy}>Atualizar logs</button>
