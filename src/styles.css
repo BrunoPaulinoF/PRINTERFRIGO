@@ -29,13 +29,13 @@ button {
   background: #1f6f50;
   color: white;
   font-weight: 800;
-  padding: 10px 14px;
+  padding: 8px 12px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   cursor: pointer;
-  min-height: 42px;
+  min-height: 36px;
   box-shadow: 0 8px 18px rgba(31, 111, 80, 0.18);
   transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease;
 }
@@ -77,8 +77,8 @@ textarea {
   border-radius: 10px;
   background: white;
   color: #18201b;
-  padding: 10px 11px;
-  min-height: 42px;
+  padding: 8px 10px;
+  min-height: 36px;
   outline: none;
   transition: border-color 120ms ease, box-shadow 120ms ease;
 }
@@ -97,7 +97,7 @@ textarea {
 
 label {
   display: block;
-  margin: 14px 0 7px;
+  margin: 10px 0 4px;
   color: #5b675d;
   font-size: 12px;
   font-weight: 800;
@@ -158,15 +158,54 @@ label {
 
 .topbar {
   display: grid;
-  gap: 14px;
+  gap: 12px;
   justify-items: stretch;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
   border: 1px solid rgba(207, 216, 204, 0.8);
   border-radius: 20px;
   background: rgba(255, 255, 255, 0.82);
-  padding: 16px;
+  padding: 14px;
   box-shadow: 0 18px 44px rgba(26, 59, 41, 0.08);
   backdrop-filter: blur(10px);
+}
+
+.tabs {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  margin-bottom: 12px;
+  padding: 5px;
+  border: 1px solid rgba(207, 216, 204, 0.8);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.tabs button {
+  min-height: 34px;
+  padding: 6px 4px;
+  gap: 5px;
+  font-size: 12px;
+  border-radius: 10px;
+  background: transparent;
+  color: #5b675d;
+  box-shadow: none;
+}
+
+.tabs button:hover:not(:disabled) {
+  background: #edf6f0;
+  color: #1f6f50;
+  box-shadow: none;
+  transform: none;
+}
+
+.tabs button.active {
+  background: #1f6f50;
+  color: #ffffff;
+}
+
+.tabs button.active:hover:not(:disabled) {
+  background: #18593f;
+  color: #ffffff;
 }
 
 .brand {
@@ -232,7 +271,7 @@ h2 {
   border: 1px solid #dce3d8;
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.92);
-  padding: 16px;
+  padding: 14px;
   box-shadow: 0 12px 30px rgba(26, 59, 41, 0.07);
 }
 
@@ -329,8 +368,8 @@ h2 {
   border: 1px solid #e4ebe0;
   border-radius: 14px;
   background: #f9fbf8;
-  padding: 15px;
-  margin: 14px 0;
+  padding: 12px;
+  margin: 10px 0;
 }
 
 .add-device-button {
@@ -343,7 +382,7 @@ h2 {
 
 .split {
   display: grid;
-  grid-template-columns: 1fr;
+  grid-template-columns: 1fr 1fr;
   gap: 12px;
 }
 
@@ -413,20 +452,20 @@ h2 {
 }
 
 .reading {
-  margin: 14px 0 0;
+  margin: 12px 0 0;
   border: 1px solid #d6eadf;
   border-radius: 14px;
   background: linear-gradient(135deg, #eaf8f0, #ffffff);
   color: #1f6f50;
   font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
-  font-size: 26px;
+  font-size: 24px;
   font-weight: 900;
-  padding: 12px 14px;
+  padding: 10px 14px;
 }
 
 pre {
-  margin: 14px 0 0;
-  min-height: 96px;
+  margin: 12px 0 0;
+  min-height: 72px;
   overflow: auto;
   border-radius: 14px;
   background: #172018;
@@ -439,7 +478,7 @@ pre {
   display: grid;
   gap: 8px;
   margin-top: 12px;
-  max-height: 280px;
+  max-height: 220px;
   overflow: auto;
 }
 
@@ -629,10 +668,14 @@ pre {
   letter-spacing: 1px;
 }
 
-/* Ajustes finos para janelas muito estreitas (o layout já é coluna única por padrão). */
-@media (max-width: 420px) {
+/* Ajustes finos para janelas muito estreitas. */
+@media (max-width: 400px) {
   .app-shell {
     padding: 12px;
+  }
+
+  .split {
+    grid-template-columns: 1fr;
   }
 
   .brand-logo {

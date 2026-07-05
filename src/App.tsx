@@ -256,6 +256,7 @@ export function App() {
   const [rawFrame, setRawFrame] = useState<string | null>(null);
   const [status, setStatus] = useState("Carregando configuracao local...");
   const [isBusy, setIsBusy] = useState(false);
+  const [activeTab, setActiveTab] = useState<"onboarding" | "balanca" | "impressora" | "servico">("balanca");
   const [stationUnlocked, setStationUnlocked] = useState(false);
   const [stationPassword, setStationPassword] = useState("");
   const [stationError, setStationError] = useState("");
@@ -1173,10 +1174,18 @@ export function App() {
         </div>
       </section>
 
+      <nav className="tabs">
+        <button className={activeTab === "onboarding" ? "active" : ""} onClick={() => setActiveTab("onboarding")}><ShieldCheck size={15} /> Onboarding</button>
+        <button className={activeTab === "balanca" ? "active" : ""} onClick={() => setActiveTab("balanca")}><Scale size={15} /> Balanca</button>
+        <button className={activeTab === "impressora" ? "active" : ""} onClick={() => setActiveTab("impressora")}><Printer size={15} /> Impressora</button>
+        <button className={activeTab === "servico" ? "active" : ""} onClick={() => setActiveTab("servico")}><PlugZap size={15} /> Servico</button>
+      </nav>
+
       <section className="grid">
+        {activeTab === "onboarding" && (
         <div className="panel onboarding-panel">
           <h2><ShieldCheck size={18} /> Onboarding</h2>
-          <p className="section-kicker">Vincule esta estacao ao KyberFrigo e mantenha o nome local organizado.</p>
+          <p className="section-kicker">Vincule esta estacao ao KyberFrigo.</p>
           <div className="split">
             <div>
               <FieldLabel help="Endereco do KyberFrigo que esta estacao vai acessar.">URL KyberFrigo</FieldLabel>
@@ -1194,10 +1203,12 @@ export function App() {
           </div>
           <p className="muted">Tenant: {config.tenantId ?? "nao vinculado"}</p>
         </div>
+        )}
 
+        {activeTab === "balanca" && (
         <div className="panel scale-panel">
           <h2><Scale size={18} /> Balanca</h2>
-          <p className="section-kicker">Configure porta, leitura minima e parser sem alterar o fluxo de captura.</p>
+          <p className="section-kicker">Configure porta, leitura e parser.</p>
           {scales.map((scale, index) => (
             <div className="device-box" key={`${scale.port}-${index}`}>
               <div className="row spread">
@@ -1321,10 +1332,12 @@ export function App() {
           )}
           <p className="reading">{lastWeight === null ? "--" : `${lastWeight.toFixed(3)} kg`}</p>
         </div>
+        )}
 
+        {activeTab === "impressora" && (
         <div className="panel printer-panel">
           <h2><Printer size={18} /> Impressora</h2>
-          <p className="muted">Caminho recomendado: instale a Zebra/Elgin no Windows, clique em Atualizar, use a impressora padrao e imprima uma etiqueta de teste.</p>
+          <p className="section-kicker">Instale a impressora no Windows, use a padrao e imprima uma etiqueta de teste.</p>
           {printersConfig.map((printer, index) => (
             <div className="device-box" key={`${printer.localId}-${index}`}>
               <div className="row spread">
@@ -1344,7 +1357,6 @@ export function App() {
                     <option value="">Selecionar impressora</option>
                     {printers.map((item) => <option key={item.name} value={item.name}>{item.name}{item.isDefault ? " (padrao)" : ""}</option>)}
                   </select>
-                  <p className="tip">Este nome precisa bater com a fila instalada no Windows. O PrinterFrigo envia ZPL RAW direto para essa fila.</p>
                   <div className="row action-row">
                     <button className="secondary" onClick={() => useDefaultPrinter(index)} disabled={isBusy || !defaultPrinter}>Usar impressora padrao</button>
                     <button onClick={() => testPrinterAt(index)} disabled={isBusy || !printer.queueName}>Imprimir etiqueta teste</button>
@@ -1372,16 +1384,17 @@ export function App() {
             <button className="secondary" onClick={refreshDevices}><RefreshCw size={15} /> Atualizar dispositivos</button>
           </div>
         </div>
+        )}
 
+        {activeTab === "servico" && (
         <div className="panel service-panel">
           <h2><PlugZap size={18} /> Servico</h2>
-          <p className="muted">Versao {appVersion}. As atualizacoes sao manuais: use o botao abaixo para procurar e instalar uma nova versao.</p>
+          <p className="section-kicker">Versao {appVersion}. Atualizacoes sao manuais (botao abaixo).</p>
           <div className="actions">
             <button onClick={() => persist()} disabled={isBusy}><Save size={15} /> Salvar</button>
             <button className="secondary" onClick={heartbeat} disabled={!isEnrolled || isBusy}>Heartbeat</button>
             <button className="secondary" onClick={syncReceivingConfig} disabled={!isEnrolled || isBusy}>Sincronizar Receiving</button>
           </div>
-          <p className="tip">Use depois de escolher impressora/balanca. Isto vincula a estacao ao ponto Receiving no KyberFrigo.</p>
           <div className="actions action-row">
             <button className="secondary" onClick={() => void handleCheckUpdate()} disabled={updateBusy}>
               <RefreshCw size={15} /> {updateBusy ? "Verificando..." : "Procurar atualizacao"}
@@ -1417,6 +1430,7 @@ export function App() {
             ))}
           </div>
         </div>
+        )}
       </section>
     </main>
   );
