@@ -14,10 +14,10 @@
       {
         "label": "main",
         "title": "PrinterFrigo",
-        "width": 980,
+        "width": 500,
         "height": 760,
-        "minWidth": 760,
-        "minHeight": 620
+        "minWidth": 420,
+        "minHeight": 680
       }
     ],
     "security": {
