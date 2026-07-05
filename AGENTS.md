@@ -2,41 +2,32 @@
 
 ## Como fazer release (versão nova)
 
-**NUNA usar workflow automático de bump.** O `GITHUB_TOKEN` usado por workflows não dispara outros workflows (proteção do GitHub contra loops). Isso quebra o release automático do Tauri.
+**O release agora é automático a cada merge na `main`.** O workflow `.github/workflows/release.yml` (job `release`, trigger `push` na `main`) faz tudo sozinho:
 
-### Processo manual (funciona 100%)
+1. Calcula a próxima versão (incrementa o **patch** a partir da maior entre `package.json` e a última tag `v*`).
+2. Bumpa os **4 arquivos** de versão: `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` (`[package]`) e `BUILD_VERSION` em `src/App.tsx`.
+3. Commita o bump de volta na `main` (`chore(release): vX.Y.Z [skip ci]`) e cria a tag `vX.Y.Z`.
+4. Builda e publica o instalador Windows assinado + o manifesto de auto-update (`latest.json`) em GitHub Releases.
 
-1. **Bumpar versão** nos 4 arquivos:
-   - `package.json` → `"version": "X.Y.Z"`
-   - `src-tauri/tauri.conf.json` → `"version": "X.Y.Z"`
-   - `src-tauri/Cargo.toml` → `version = "X.Y.Z"`
-   - `src/App.tsx` → `const BUILD_VERSION = "X.Y.Z"`
+### Processo (a partir de agora)
 
-2. **Commit**:
-   ```bash
-   git add -A
-   git commit -m "chore(release): bump version to X.Y.Z"
-   ```
+1. Faça sua mudança numa branch e **mergeie o PR na `main`**.
+2. Aguarde o workflow `Release` (~8 minutos). Também dá para disparar manualmente pela aba Actions (`workflow_dispatch`).
+3. **Verifique** em https://github.com/BrunoPaulinoF/PRINTERFRIGO/releases/latest se o release apareceu com o instalador `.exe`.
 
-3. **Push para `main`**:
-   ```bash
-   git push origin main
-   ```
+Não é mais necessário bumpar versão nem criar tag na mão — o CI faz isso. Cada merge na `main` gera uma versão nova.
 
-4. **Criar e pushar a tag** (isso dispara o GitHub Actions de release):
-   ```bash
-   git tag vX.Y.Z
-   git push origin vX.Y.Z
-   ```
+### Por que ISSO funciona (e o auto-bump antigo não funcionava)
 
-5. **Aguardar** o workflow `Release` buildar no GitHub Actions (~8 minutos).
+A armadilha do GitHub: **um push feito com `GITHUB_TOKEN` não dispara outros workflows** (proteção contra loops). O auto-bump antigo criava a tag num workflow e esperava que o workflow de release (com trigger `on: push: tags`) fosse disparado — o que **nunca acontecia**.
 
-6. **Verificar** em https://github.com/BrunoPaulinoF/PRINTERFRIGO/releases/latest se o release apareceu com o instalador `.exe`.
+O workflow atual evita isso fazendo **bump + tag + build + publish no MESMO job**, sem depender de nenhum trigger cruzado. Como bônus, o mesmo mecanismo (`GITHUB_TOKEN` não redispara workflows), somado ao `[skip ci]` no commit de bump, garante que o commit de volta na `main` **não** cria um loop de releases.
 
 ### O que NÃO fazer
 
-- Não criar `.github/workflows/bump-version.yml` com auto-tag usando `secrets.GITHUB_TOKEN` — isso bloqueia o trigger do workflow `Release`.
-- Não esquecer de atualizar `BUILD_VERSION` em `src/App.tsx` — a versão exibida na UI vem do Tauri (`getVersion()`), mas o `BUILD_VERSION` é usado para migração de config.
+- Não voltar a separar "workflow que cria a tag" de "workflow que builda no trigger de tag" — é exatamente o padrão que quebra por causa do `GITHUB_TOKEN`.
+- Não esquecer de manter o bump dos 4 arquivos sincronizado se editar o workflow — a versão exibida na UI vem do Tauri (`getVersion()`, lê `tauri.conf.json`), mas o `BUILD_VERSION` em `src/App.tsx` é usado para migração de config.
+- Não ligar proteção de branch na `main` que bloqueie push do `github-actions[bot]` sem exceção — o workflow precisa commitar o bump de volta.
 
 ### Tags existentes
 

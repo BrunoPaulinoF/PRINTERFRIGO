@@ -511,26 +511,15 @@ Se a chave privada vazou em algum momento:
 
 ## Publicar Uma Release
 
-1. Confirme que a chave privada esta no GitHub Secrets.
+**O release e automatico a cada merge na `main`.** O workflow `.github/workflows/release.yml` incrementa o patch, bumpa os 4 arquivos de versao (`package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, `BUILD_VERSION` em `src/App.tsx`), cria a tag `vX.Y.Z` e publica o instalador Windows assinado + `latest.json`.
+
+1. Confirme que a chave privada de assinatura esta no GitHub Secrets (`TAURI_SIGNING_PRIVATE_KEY` / `..._PASSWORD`).
 2. Confirme que `tauri-private.key` nao esta no git.
-3. Atualize a versao em:
+3. Mergeie seu PR na `main` (ou dispare o workflow `Release` manualmente pela aba Actions).
+4. Aguarde o GitHub Actions gerar os instaladores (~8 min).
+5. Baixe o `.exe` na pagina de Releases.
 
-```text
-package.json
-src-tauri/tauri.conf.json
-src-tauri/Cargo.toml
-```
-
-4. Commit e push.
-5. Crie a tag:
-
-```powershell
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-6. Aguarde o GitHub Actions gerar os instaladores.
-7. Baixe o `.exe` em Releases.
+Nao e mais necessario bumpar versao nem criar tag na mao. Detalhes e a razao tecnica em `AGENTS.md`.
 
 ## Desenvolvimento
 
