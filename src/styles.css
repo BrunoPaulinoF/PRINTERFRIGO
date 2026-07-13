@@ -220,7 +220,7 @@ label {
   height: 52px;
   flex: 0 0 auto;
   border-radius: 16px;
-  box-shadow: 0 12px 24px rgba(16, 61, 43, 0.22);
+  box-shadow: 0 12px 24px rgba(156, 12, 20, 0.24);
 }
 
 .topbar-status {
@@ -542,7 +542,7 @@ pre {
   width: 84px;
   height: 84px;
   border-radius: 22px;
-  box-shadow: 0 14px 28px rgba(16, 61, 43, 0.22);
+  box-shadow: 0 14px 28px rgba(156, 12, 20, 0.24);
   margin-bottom: 14px;
 }
 

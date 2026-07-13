@@ -99,7 +99,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: v${{ steps.version.outputs.new }}
-          releaseName: "PRINTERFRIGO v${{ steps.version.outputs.new }}"
+          releaseName: "PrinterFrigo v${{ steps.version.outputs.new }}"
           releaseBody: "Instaladores Windows e manifesto de auto-update assinado."
           releaseDraft: false
           prerelease: false
