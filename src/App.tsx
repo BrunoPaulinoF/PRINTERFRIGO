@@ -105,6 +105,16 @@ type AutoSessionState = {
 
 type LocalLogLevel = "info" | "warn" | "error";
 
+/// Estado da checagem de atualizacao. A instalacao NUNCA parte daqui sozinha:
+/// so `confirmUpdate`, chamado pelo botao, baixa e instala.
+type UpdateCheck =
+  | { status: "idle" }
+  | { status: "checking" }
+  | { status: "current"; version: string }
+  | { status: "available"; version: string }
+  | { status: "installing"; version: string }
+  | { status: "error"; message: string };
+
 function hasFreshAutoSessionLease(session: HardwareSession, nowMs = Date.now()) {
   const rawLeaseAt = typeof session.context.browserLeaseAt === "string" ? session.context.browserLeaseAt : "";
   const leaseAt = rawLeaseAt ? new Date(rawLeaseAt).getTime() : NaN;
@@ -262,8 +272,8 @@ export function App() {
   const [resetBusy, setResetBusy] = useState(false);
   const [resetMessage, setResetMessage] = useState("");
   const [appVersion, setAppVersion] = useState(BUILD_VERSION);
-  const [updateBusy, setUpdateBusy] = useState(false);
-  const [updatePrompt, setUpdatePrompt] = useState<{ version: string } | null>(null);
+  const [updateCheck, setUpdateCheck] = useState<UpdateCheck>({ status: "idle" });
+  const updateBusy = updateCheck.status === "checking" || updateCheck.status === "installing";
   const [localLogs, setLocalLogs] = useState<LocalLogEntry[]>([]);
   const [autoConfig, setAutoConfig] = useState<AutoConfigureResult | null>(null);
   const [autoConfigBusy, setAutoConfigBusy] = useState(false);
@@ -1081,38 +1091,49 @@ export function App() {
     setResetMessage("");
   }
 
+  /// Consulta o servidor de releases. Cada clique refaz a consulta, inclusive
+  /// depois de ja ter encontrado uma versao nova. Nunca instala nada.
   async function handleCheckUpdate() {
-    setUpdateBusy(true);
-    setUpdatePrompt(null);
+    if (updateBusy) return;
+    setUpdateCheck({ status: "checking" });
     setStatus("Procurando atualizacao...");
     try {
       const result = await checkUpdate();
       if (result.available && result.version) {
-        setUpdatePrompt({ version: result.version });
-        setStatus(`Nova versao ${result.version} disponivel.`);
+        setUpdateCheck({ status: "available", version: result.version });
+        setStatus(`Nova versao ${result.version} disponivel. A atualizacao so acontece se voce clicar em atualizar.`);
       } else {
+        setUpdateCheck({ status: "current", version: result.current });
         setStatus(`Voce ja esta na versao mais recente (v${result.current}).`);
       }
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Falha ao procurar atualizacao.");
-    } finally {
-      setUpdateBusy(false);
+      const message = errorMessage(error, "Falha ao procurar atualizacao.");
+      setUpdateCheck({ status: "error", message });
+      setStatus(message);
     }
   }
 
+  /// Unico caminho que baixa e instala. So e alcancavel pelo botao de
+  /// confirmacao, depois de uma checagem ter encontrado versao nova.
   async function confirmUpdate() {
-    setUpdateBusy(true);
+    if (updateCheck.status !== "available") return;
+    const version = updateCheck.version;
+    setUpdateCheck({ status: "installing", version });
     setStatus("Baixando e instalando atualizacao... O app sera reiniciado.");
     try {
       await installUpdate();
       // Em caso de sucesso o app reinicia; se retornar, apenas informa.
+      setUpdateCheck({ status: "idle" });
       setStatus("Atualizacao concluida.");
-      setUpdatePrompt(null);
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Falha ao instalar atualizacao.");
-    } finally {
-      setUpdateBusy(false);
+      const message = errorMessage(error, "Falha ao instalar atualizacao.");
+      setUpdateCheck({ status: "error", message });
+      setStatus(message);
     }
+  }
+
+  function dismissUpdateCheck() {
+    setUpdateCheck({ status: "idle" });
   }
 
   async function resetPrinter() {
@@ -1194,7 +1215,52 @@ export function App() {
             {isEnrolled ? <CheckCircle2 size={16} /> : <WifiOff size={16} />}
             {isEnrolled ? "Matriculado" : "Nao matriculado"}
           </div>
-          <span className="version-badge">v{appVersion}</span>
+          <div className="version-menu">
+            <button
+              className={`version-badge-button${updateCheck.status === "available" ? " has-update" : ""}`}
+              onClick={() => void handleCheckUpdate()}
+              disabled={updateBusy}
+              title="Clique para procurar uma versao nova. O app nunca atualiza sozinho."
+            >
+              <RefreshCw size={14} className={updateBusy ? "spinning" : undefined} />
+              v{appVersion}
+              {updateCheck.status === "available" && <span className="version-dot" aria-hidden="true" />}
+            </button>
+            {updateCheck.status !== "idle" && (
+              <div className="version-popover">
+                {updateCheck.status === "checking" && <p className="version-popover-text">Procurando atualizacao...</p>}
+                {updateCheck.status === "current" && (
+                  <>
+                    <p className="version-popover-text">Voce ja esta na versao mais recente (v{updateCheck.version}).</p>
+                    <button className="secondary" onClick={dismissUpdateCheck}>Fechar</button>
+                  </>
+                )}
+                {updateCheck.status === "available" && (
+                  <>
+                    <p className="version-popover-text">
+                      <strong>Versao {updateCheck.version} disponivel.</strong> Voce esta na v{appVersion}. O app sera
+                      reiniciado ao atualizar.
+                    </p>
+                    <div className="row">
+                      <button onClick={() => void confirmUpdate()}>
+                        <Zap size={15} /> Atualizar para {updateCheck.version}
+                      </button>
+                      <button className="secondary" onClick={dismissUpdateCheck}>Agora nao</button>
+                    </div>
+                  </>
+                )}
+                {updateCheck.status === "installing" && (
+                  <p className="version-popover-text">Baixando e instalando a versao {updateCheck.version}...</p>
+                )}
+                {updateCheck.status === "error" && (
+                  <>
+                    <p className="version-popover-text error">{updateCheck.message}</p>
+                    <button className="secondary" onClick={dismissUpdateCheck}>Fechar</button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
           <button className="ghost lock-button" onClick={lockStation} title="Bloquear estacao">
             <Lock size={15} /> Bloquear
           </button>
@@ -1424,7 +1490,7 @@ export function App() {
         {activeTab === "servico" && (
         <div className="panel service-panel">
           <h2><PlugZap size={18} /> Servico</h2>
-          <p className="section-kicker">Versao {appVersion}. Atualizacoes sao manuais (botao abaixo).</p>
+          <p className="section-kicker">Versao {appVersion}. O app nunca atualiza sozinho: use o botao da versao no topo ou o botao abaixo.</p>
           <div className="actions">
             <button onClick={() => persist()} disabled={isBusy}><Save size={15} /> Salvar</button>
             <button className="secondary" onClick={heartbeat} disabled={!isEnrolled || isBusy}>Heartbeat</button>
@@ -1435,14 +1501,14 @@ export function App() {
               <RefreshCw size={15} /> {updateBusy ? "Verificando..." : "Procurar atualizacao"}
             </button>
           </div>
-          {updatePrompt && (
+          {updateCheck.status === "available" && (
             <div className="auto-config">
-              <p className="auto-config-message">Nova versao {updatePrompt.version} disponivel. Deseja atualizar agora? O app sera reiniciado.</p>
+              <p className="auto-config-message">Nova versao {updateCheck.version} disponivel. Deseja atualizar agora? O app sera reiniciado.</p>
               <div className="row">
                 <button onClick={() => void confirmUpdate()} disabled={updateBusy}>
                   <Zap size={15} /> Sim, atualizar
                 </button>
-                <button className="secondary" onClick={() => setUpdatePrompt(null)} disabled={updateBusy}>Agora nao</button>
+                <button className="secondary" onClick={dismissUpdateCheck} disabled={updateBusy}>Agora nao</button>
               </div>
             </div>
           )}

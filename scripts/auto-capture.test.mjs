@@ -145,3 +145,52 @@ test("auto capture rearms the last-captured weight before submit to avoid duplic
     "auto-capture must catch submitCapture errors so state stays consistent and flushPendingCaptures can retry",
   );
 });
+
+test("updates only ever install from an explicit click", async () => {
+  const source = await readFile(appPath, "utf8");
+  const libPath = new URL("../src-tauri/src/lib.rs", import.meta.url);
+  const libSource = await readFile(libPath, "utf8");
+
+  // A estacao fica num ponto de pesagem: uma atualizacao disparada sozinha
+  // reinicia o app no meio do recebimento. Instalar so pode partir do botao.
+  assert.ok(source.includes("async function confirmUpdate()"), "install must live behind its own confirm handler");
+  const installCalls = source.match(/await installUpdate\(\)/g) ?? [];
+  assert.equal(installCalls.length, 1, "installUpdate must have exactly one call site");
+
+  const confirmBlock = source.match(/async function confirmUpdate\(\)[\s\S]*?\n  \}/);
+  assert.ok(confirmBlock, "confirmUpdate must be readable as a block");
+  assert.ok(
+    confirmBlock[0].includes("await installUpdate()"),
+    "the only installUpdate call must sit inside confirmUpdate",
+  );
+  assert.ok(
+    /if \(updateCheck\.status !== "available"\) return;/.test(confirmBlock[0]),
+    "confirmUpdate must refuse to install unless a check found a newer version",
+  );
+
+  // Nenhum useEffect pode chamar a checagem ou a instalacao no arranque.
+  for (const effect of source.match(/useEffect\(\(\) => \{[\s\S]*?\n  \}, \[[^\]]*\]\);/g) ?? []) {
+    assert.equal(effect.includes("installUpdate"), false, "no effect may install an update on its own");
+    assert.equal(effect.includes("handleCheckUpdate"), false, "no effect may check for updates on its own");
+  }
+
+  // O plugin do Tauri tambem nao pode instalar por conta propria no setup.
+  assert.equal(
+    /download_and_install/.test(libSource.replace(/async fn install_update[\s\S]*?\n\}/, "")),
+    false,
+    "download_and_install must only exist inside the install_update command",
+  );
+});
+
+test("the topbar version button drives the manual update flow", async () => {
+  const source = await readFile(appPath, "utf8");
+
+  assert.ok(source.includes("version-badge-button"), "the current version must be a clickable button in the topbar");
+  assert.ok(
+    /version-badge-button[\s\S]{0,240}onClick=\{\(\) => void handleCheckUpdate\(\)\}/.test(source),
+    "clicking the version button must re-run the check",
+  );
+  assert.ok(source.includes('updateCheck.status === "available"'), "a newer version must surface an update action");
+  assert.ok(source.includes("Atualizar para "), "the update action must name the target version");
+  assert.ok(source.includes("dismissUpdateCheck"), "the operator must be able to dismiss the prompt without updating");
+});

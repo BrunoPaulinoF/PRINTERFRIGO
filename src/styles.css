@@ -418,7 +418,11 @@ h2 {
   white-space: nowrap;
 }
 
-.version-badge {
+.version-menu {
+  position: relative;
+}
+
+.version-badge-button {
   border: 1px solid #dce3d8;
   border-radius: 999px;
   background: #f7faf6;
@@ -426,6 +430,79 @@ h2 {
   padding: 8px 12px;
   font-size: 12px;
   font-weight: 900;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.version-badge-button:hover:not(:disabled) {
+  border-color: #9bd2b5;
+  background: #ecf6ef;
+  color: #17633f;
+}
+
+.version-badge-button:disabled {
+  cursor: progress;
+  opacity: 0.75;
+}
+
+.version-badge-button.has-update {
+  border-color: #9bd2b5;
+  background: #e8f7ef;
+  color: #17633f;
+}
+
+.version-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #1f6f50;
+}
+
+.spinning {
+  animation: version-spin 1s linear infinite;
+}
+
+@keyframes version-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinning {
+    animation: none;
+  }
+}
+
+.version-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 20;
+  width: max-content;
+  max-width: 320px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid #dce3d8;
+  background: #ffffff;
+  box-shadow: 0 12px 28px rgba(16, 40, 24, 0.16);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.version-popover-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #1f3327;
+}
+
+.version-popover-text.error {
+  color: #7a2018;
 }
 
 .pill.online {

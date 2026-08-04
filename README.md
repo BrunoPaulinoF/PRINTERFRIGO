@@ -19,7 +19,7 @@ O PrinterFrigo fica rodando na estacao de pesagem. Ele le a balanca, envia o pes
 - Reporta status de impressao para o KyberFrigo.
 - Mantem configuracao local em SQLite.
 - Suporta tray/background.
-- Esta preparado para auto-update por GitHub Releases assinadas.
+- Atualiza por GitHub Releases assinadas, sempre sob clique do operador (nunca sozinho).
 
 ## Responsabilidades
 
@@ -489,9 +489,31 @@ Correcoes:
 - revisar driver/fila Windows;
 - testar com outro utilitario RAW.
 
-## Auto-update
+## Atualizacao De Versao
 
-O auto-update usa GitHub Releases assinadas.
+**O app nunca atualiza sozinho.** Nao ha checagem no arranque, nem instalacao
+em segundo plano: uma estacao no ponto de pesagem nao pode reiniciar no meio de
+um recebimento. Uma versao nova so entra quando alguem clica para instalar.
+
+Como atualizar:
+
+1. Clique no botao com a versao atual, no topo da tela (ex.: `v0.5.5`).
+2. Ele consulta as releases e responde ali mesmo: ou "voce ja esta na versao
+   mais recente", ou "versao X disponivel". Cada clique refaz a consulta.
+3. Se houver versao nova, aparece o botao **Atualizar para vX**. Nada e baixado
+   antes disso.
+4. Ao clicar, o app baixa, instala e reinicia sozinho.
+
+**Agora nao** fecha o aviso sem instalar. O mesmo fluxo tambem esta na aba
+Servico, no botao "Procurar atualizacao".
+
+Consequencia pratica: mergear um PR e publicar uma release **nao** mexe nas
+estacoes em campo. Cada estacao continua na versao dela ate alguem atualizar
+manualmente.
+
+### Assinatura Das Releases
+
+As releases usam GitHub Releases assinadas.
 
 Configuracao em:
 
