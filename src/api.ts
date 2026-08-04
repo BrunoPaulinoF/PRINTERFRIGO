@@ -9,6 +9,7 @@ import type {
   PrinterConfig,
   PrinterInfo,
   RealtimeTokenResult,
+  StableReading,
   StationConfig,
 } from "./types";
 
@@ -42,6 +43,13 @@ export function readScaleOnce(config: StationConfig["scale"]): Promise<number> {
 
 export function readScaleRaw(config: StationConfig["scale"]): Promise<string> {
   return invoke("read_scale_raw", { config });
+}
+
+/// Le a balanca ate estabilizar mantendo a porta aberta entre as amostras.
+/// Uma unica chamada substitui as varias leituras que antes eram espalhadas
+/// por ciclos de heartbeat.
+export function readScaleStable(config: StationConfig["scale"]): Promise<StableReading> {
+  return invoke("read_scale_stable", { config });
 }
 
 export function autoConfigureScaleSerial(config: StationConfig["scale"]): Promise<AutoConfigureResult> {

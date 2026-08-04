@@ -20,8 +20,8 @@ import {
   listSerialPorts,
   loadConfig,
   quickResetPrinters,
-  readScaleOnce,
   readScaleRaw,
+  readScaleStable,
   reportPrintJob as reportPrintJobApi,
   savePendingCaptureSubmit,
   savePendingPrintJobReport,
@@ -31,7 +31,7 @@ import {
   testScaleParse,
   writeLocalLog,
 } from "./api";
-import type { AutoConfigureResult, LocalLogEntry, PendingCaptureSubmit, PendingPrintJobReport, PortInfo, PrinterConfig, PrinterInfo, ScaleConfig, StationConfig } from "./types";
+import type { AutoConfigureResult, LocalLogEntry, PendingCaptureSubmit, PendingPrintJobReport, PortInfo, PrinterConfig, PrinterInfo, ScaleConfig, StableReading, StationConfig } from "./types";
 
 const BUILD_VERSION = "0.5.5";
 const STATION_PASSWORD_HASH = "412b800684ad737f0b892151ccfd8b45578a413d2607c8ff0a134aeeeffbf186";
@@ -94,19 +94,16 @@ type HeartbeatResult = {
 };
 
 type AutoSessionState = {
-  samples: number[];
   lastCapturedAt: number;
   lastCapturedWeight: number | null;
+  // A balanca voltou ao zero depois da ultima captura, ou seja, a peca anterior
+  // saiu do gancho. Rearma a captura mesmo quando a peca seguinte pesa quase o
+  // mesmo que a anterior — algo comum em carcacas e invisivel para a checagem
+  // de variacao de peso quando a tolerancia e de 100 g.
+  sawZeroSinceCapture: boolean;
 };
 
 type LocalLogLevel = "info" | "warn" | "error";
-
-function isStable(samples: number[], thresholdKg: number) {
-  if (samples.length < 2) return false;
-  const min = Math.min(...samples);
-  const max = Math.max(...samples);
-  return Math.abs(max - min) <= thresholdKg;
-}
 
 function hasFreshAutoSessionLease(session: HardwareSession, nowMs = Date.now()) {
   const rawLeaseAt = typeof session.context.browserLeaseAt === "string" ? session.context.browserLeaseAt : "";
@@ -148,11 +145,13 @@ const defaultConfig: StationConfig = {
     readCommand: "",
     parserRegex: "([-+]?\\d+[\\.,]?\\d*)\\s*kg?",
     stableWindow: 4,
-    stableThresholdKg: 0.02,
-    stableMs: 1200,
+    stableThresholdKg: 0.1,
+    stableMs: 800,
     minWeightKg: 1,
     cooldownMs: 1500,
     zeroThresholdKg: 0.25,
+    stableTimeoutMs: 5000,
+    sampleIntervalMs: 60,
   },
   printer: {
     mode: "windows_spooler",
@@ -276,6 +275,7 @@ export function App() {
   const printedJobs = useRef(new Set<string>());
   const autoSessions = useRef(new Map<string, AutoSessionState>());
   const serviceNextPollMs = useRef(IDLE_SERVICE_POLL_MS);
+  const hasAutoSessionRef = useRef(false);
   const serviceTicking = useRef(false);
   const realtimeConnected = useRef(false);
   const lastServiceErrorLogAt = useRef(0);
@@ -611,7 +611,7 @@ export function App() {
     }
   }
 
-  async function submitCapture(session: HardwareSession, weight: number, commandId: string) {
+  async function submitCapture(session: HardwareSession, weight: number, commandId: string, stable = true) {
     if (!config.token) return;
     const captureId = `${session.id}-${commandId}`;
     const request: PendingCaptureSubmit = {
@@ -620,7 +620,7 @@ export function App() {
       pointId: session.point_id,
       flow: session.flow,
       grossWeight: weight,
-      stable: true,
+      stable,
       payload: { context: session.context },
     };
     await savePendingCaptureSubmit(captureId, request);
@@ -727,13 +727,17 @@ export function App() {
       processingCommands.current.add(commandId);
       try {
         const scale = scaleForSession(session);
-        const weight = await readScaleOnce(scale);
+        // Forcar leitura tambem espera a balanca assentar; se o tempo limite
+        // estourar, envia a ultima leitura marcada como instavel em vez de
+        // devolver um valor colhido no meio do balanco.
+        const reading = await readScaleStable(scale);
+        const weight = reading.weightKg;
         setLastWeight(weight);
         if (weight < scale.minWeightKg) {
           handledCommands.current.add(commandId);
           throw new Error(`Peso ${weight.toFixed(3)} kg abaixo do minimo ${scale.minWeightKg.toFixed(3)} kg.`);
         }
-        await submitCapture(session, weight, commandId);
+        await submitCapture(session, weight, commandId, reading.stable);
         handledCommands.current.add(commandId);
       } catch (error) {
         setStatus(error instanceof Error ? error.message : "Falha ao capturar peso.");
@@ -745,28 +749,44 @@ export function App() {
     for (const session of sessions) {
       if (session.mode !== "AUTO" || session.status !== "ACTIVE") continue;
       if (!hasFreshAutoSessionLease(session, Number.isFinite(serverNowMs) ? serverNowMs : Date.now())) continue;
-      const state = autoSessions.current.get(session.id) ?? { samples: [], lastCapturedAt: 0, lastCapturedWeight: null };
+      const state = autoSessions.current.get(session.id)
+        ?? { lastCapturedAt: 0, lastCapturedWeight: null, sawZeroSinceCapture: true };
       const scale = scaleForSession(session);
-      const weight = await readScaleOnce(scale);
+
+      // A estabilizacao inteira acontece dentro de uma unica chamada nativa,
+      // com a porta aberta e dezenas de amostras por segundo. Antes era uma
+      // amostra por ciclo de servico (poll + HTTP + abrir/fechar a serial),
+      // o que fazia cada peca levar dezenas de segundos para fechar peso.
+      let reading: StableReading;
+      try {
+        reading = await readScaleStable(scale);
+      } catch (error) {
+        // Balanca desconectada ou sem resposta nao pode derrubar o tick: o
+        // catch externo colocava o polling em modo ocioso e a proxima pesagem
+        // so acontecia quando o Realtime acordasse o agente.
+        autoSessions.current.set(session.id, state);
+        recordLocalLog("warn", "Falha ao ler a balanca na captura automatica.", {
+          sessionId: session.id,
+          flow: session.flow,
+          error: errorMessage(error, "Falha ao ler a balanca."),
+        });
+        continue;
+      }
+
+      const weight = reading.weightKg;
       setLastWeight(weight);
 
       if (weight <= scale.zeroThresholdKg) {
-        state.samples = [];
         state.lastCapturedWeight = null;
+        state.sawZeroSinceCapture = true;
         autoSessions.current.set(session.id, state);
         continue;
       }
 
-      state.samples = [...state.samples, weight].slice(-Math.max(2, scale.stableWindow));
       const cooldownElapsed = Date.now() - state.lastCapturedAt >= scale.cooldownMs;
-      const weightChanged = hasMeaningfulWeightChange(weight, state.lastCapturedWeight, scale.stableThresholdKg);
-      if (
-        cooldownElapsed &&
-        weightChanged &&
-        weight >= scale.minWeightKg &&
-        state.samples.length >= Math.max(2, scale.stableWindow) &&
-        isStable(state.samples, scale.stableThresholdKg)
-      ) {
+      const weightChanged = state.sawZeroSinceCapture
+        || hasMeaningfulWeightChange(weight, state.lastCapturedWeight, scale.stableThresholdKg);
+      if (reading.stable && cooldownElapsed && weightChanged && weight >= scale.minWeightKg) {
         // Marca o peso como capturado ANTES de tentar enviar. submitCapture
         // salva a captura como pendente local e o flushPendingCaptures reenvia
         // se o POST falhar. Sem isso, um envio inicial que falha (rede,
@@ -774,7 +794,7 @@ export function App() {
         // duplicado para a mesma peca com captureId novo.
         state.lastCapturedAt = Date.now();
         state.lastCapturedWeight = weight;
-        state.samples = [];
+        state.sawZeroSinceCapture = false;
         try {
           await submitCapture(session, weight, makeAutoCaptureKey());
         } catch (error) {
@@ -790,6 +810,7 @@ export function App() {
     }
 
     const hasAutoSession = sessions.some((s) => s.mode === "AUTO" && s.status === "ACTIVE");
+    hasAutoSessionRef.current = hasAutoSession;
     if (hasAutoSession) {
       serviceNextPollMs.current = Math.min(serviceNextPollMs.current, AUTO_POLL_MS);
     }
@@ -830,7 +851,13 @@ export function App() {
             serverUrl: config.serverUrl,
           });
         }
-        serviceNextPollMs.current = IDLE_SERVICE_POLL_MS;
+        // Com uma sessao automatica aberta o operador esta com uma peca no
+        // gancho: cair para o intervalo ocioso (5 min) deixaria a estacao
+        // parada ate o Realtime acordar o agente. Recua so ate o intervalo
+        // ativo, o suficiente para nao martelar um servidor com problema.
+        serviceNextPollMs.current = hasAutoSessionRef.current
+          ? ACTIVE_SERVICE_POLL_MS
+          : IDLE_SERVICE_POLL_MS;
       } finally {
         serviceTicking.current = false;
         schedule(serviceNextPollMs.current);
@@ -1256,12 +1283,20 @@ export function App() {
                 <div><FieldLabel help="Peso minimo bruto para aceitar captura automatica ou manual.">Peso minimo kg</FieldLabel><input type="number" value={scale.minWeightKg} onChange={(e) => updateScaleAt(index, { minWeightKg: Number(e.target.value) })} /></div>
               </div>
               <div className="split">
-                <div><FieldLabel help="Quantidade de leituras seguidas usadas para decidir se o peso estabilizou.">Janela estabilidade</FieldLabel><input type="number" min="2" value={scale.stableWindow} onChange={(e) => updateScaleAt(index, { stableWindow: Number(e.target.value) })} /></div>
-                <div><FieldLabel help="Variacao maxima, em kg, permitida dentro da janela de estabilidade.">Tolerancia kg</FieldLabel><input type="number" step="0.001" value={scale.stableThresholdKg} onChange={(e) => updateScaleAt(index, { stableThresholdKg: Number(e.target.value) })} /></div>
+                <div><FieldLabel help="Minimo de leituras dentro da janela de tempo para aceitar o peso. Aumente se a balanca oscila muito.">Amostras minimas</FieldLabel><input type="number" min="2" value={scale.stableWindow} onChange={(e) => updateScaleAt(index, { stableWindow: Number(e.target.value) })} /></div>
+                <div><FieldLabel help="Variacao maxima, em kg, permitida na janela de estabilidade. 0,1 = aceita 100 g de oscilacao (recomendado para carcacas no trilho).">Tolerancia kg</FieldLabel><input type="number" step="0.001" value={scale.stableThresholdKg} onChange={(e) => updateScaleAt(index, { stableThresholdKg: Number(e.target.value) })} /></div>
               </div>
               <div className="split">
+                <div><FieldLabel help="Por quanto tempo o peso precisa ficar dentro da tolerancia para valer como estavel. Valores menores pesam mais rapido; maiores exigem a peca mais parada.">Estabilidade ms</FieldLabel><input type="number" min="100" step="100" value={scale.stableMs} onChange={(e) => updateScaleAt(index, { stableMs: Number(e.target.value) })} /></div>
+                <div><FieldLabel help="Tempo maximo esperando a peca assentar antes de desistir da leitura.">Tempo limite ms</FieldLabel><input type="number" min="500" step="500" value={scale.stableTimeoutMs} onChange={(e) => updateScaleAt(index, { stableTimeoutMs: Number(e.target.value) })} /></div>
+              </div>
+              <div className="split">
+                <div><FieldLabel help="Espera maxima por cada resposta da balanca. Nao e pausa fixa: a leitura segue assim que o peso chega.">Intervalo amostra ms</FieldLabel><input type="number" min="20" max="1000" step="10" value={scale.sampleIntervalMs} onChange={(e) => updateScaleAt(index, { sampleIntervalMs: Number(e.target.value) })} /></div>
                 <div><FieldLabel help="Espera minima entre duas capturas automaticas, em milissegundos.">Cooldown ms</FieldLabel><input type="number" min="0" value={scale.cooldownMs} onChange={(e) => updateScaleAt(index, { cooldownMs: Number(e.target.value) })} /></div>
-                <div><FieldLabel help="Peso considerado balanca vazia; limpa a referencia da ultima captura.">Zero kg</FieldLabel><input type="number" step="0.001" value={scale.zeroThresholdKg} onChange={(e) => updateScaleAt(index, { zeroThresholdKg: Number(e.target.value) })} /></div>
+              </div>
+              <div className="split">
+                <div><FieldLabel help="Peso considerado balanca vazia; libera a captura da proxima peca.">Zero kg</FieldLabel><input type="number" step="0.001" value={scale.zeroThresholdKg} onChange={(e) => updateScaleAt(index, { zeroThresholdKg: Number(e.target.value) })} /></div>
+                <div />
               </div>
               <FieldLabel help="Regra usada para extrair o numero do peso do texto enviado pela balanca.">Regex parser</FieldLabel>
               <input value={scale.parserRegex} onChange={(e) => updateScaleAt(index, { parserRegex: e.target.value })} />

@@ -279,10 +279,23 @@ Se nao converter:
 
 ## Captura Automatica Por Estabilidade
 
+A estabilizacao roda inteira dentro do app, com a porta da balanca aberta e
+varias amostras por segundo. Ela nao depende do intervalo de polling nem de
+falar com o KyberFrigo entre uma leitura e outra.
+
 Parametros principais:
 
-- `stableWindow`: quantidade de amostras avaliadas.
-- `stableThresholdKg`: variacao maxima permitida para considerar estavel.
+- `stableThresholdKg`: variacao maxima aceita para considerar estavel. Para
+  carcaca no trilho use `0.1` (100 g); para caixa em balanca de bancada da para
+  apertar bem mais.
+- `stableMs`: por quanto tempo o peso precisa ficar dentro dessa tolerancia.
+  E o parametro que separa "peca parada" de "peca passando pelo topo do
+  balanco". Padrao `800`.
+- `stableWindow`: minimo de amostras dentro dessa janela de tempo. Padrao `4`.
+- `stableTimeoutMs`: tempo maximo esperando assentar antes de desistir da
+  leitura. Padrao `5000`.
+- `sampleIntervalMs`: espera maxima por cada resposta da balanca. Nao e pausa
+  fixa — a leitura segue assim que o peso chega. Padrao `60`.
 - `minWeightKg`: peso minimo para capturar.
 - `cooldownMs`: tempo minimo entre capturas.
 - `zeroThresholdKg`: peso considerado retorno a zero.
@@ -290,11 +303,23 @@ Parametros principais:
 Regra operacional:
 
 1. O peso precisa estar acima do minimo.
-2. As ultimas leituras precisam variar menos que o limite.
-3. Depois de capturar, o app espera a balanca voltar para zero.
-4. So depois disso libera nova captura automatica.
+2. Todas as leituras dos ultimos `stableMs` precisam variar menos que
+   `stableThresholdKg` — e nao apenas duas leituras seguidas, que podem cair
+   por acaso dentro da tolerancia enquanto a peca balanca.
+3. Depois de capturar, a balanca voltar a zero libera a proxima peca.
+4. Se ela nao voltar a zero, uma variacao de peso maior que a tolerancia
+   tambem libera.
 
 Isso evita imprimir varias etiquetas para a mesma carcaca/caixa.
+
+### Ajuste Fino Da Velocidade
+
+- Pesagem demorando para fechar: baixe `stableMs` (ex.: `600`) ou suba
+  `stableThresholdKg`. Comece pela tolerancia.
+- Peso fechando cedo demais, ainda no balanco: suba `stableMs` (ex.: `1200`)
+  antes de apertar a tolerancia.
+- `stableTimeoutMs` nao acelera nada: ele so limita quanto tempo o app insiste
+  numa peca que nao para.
 
 ## Configuracao Da Impressora
 

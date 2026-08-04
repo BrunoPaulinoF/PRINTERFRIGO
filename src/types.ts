@@ -15,6 +15,16 @@ export type ScaleConfig = {
   minWeightKg: number;
   cooldownMs: number;
   zeroThresholdKg: number;
+  stableTimeoutMs: number;
+  sampleIntervalMs: number;
+};
+
+export type StableReading = {
+  weightKg: number;
+  stable: boolean;
+  samples: number;
+  elapsedMs: number;
+  reason: string;
 };
 
 export type PrinterConfig = {
