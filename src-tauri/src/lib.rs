@@ -131,6 +131,7 @@ pub fn run() {
             hardware::list_serial_ports,
             hardware::read_scale_once,
             hardware::read_scale_raw,
+            hardware::read_scale_stable,
             hardware::report_print_job,
             hardware::submit_capture,
             hardware::test_scale_parse,

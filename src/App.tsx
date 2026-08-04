@@ -20,8 +20,8 @@ import {
   listSerialPorts,
   loadConfig,
   quickResetPrinters,
-  readScaleOnce,
   readScaleRaw,
+  readScaleStable,
   reportPrintJob as reportPrintJobApi,
   savePendingCaptureSubmit,
   savePendingPrintJobReport,
@@ -31,7 +31,7 @@ import {
   testScaleParse,
   writeLocalLog,
 } from "./api";
-import type { AutoConfigureResult, LocalLogEntry, PendingCaptureSubmit, PendingPrintJobReport, PortInfo, PrinterConfig, PrinterInfo, ScaleConfig, StationConfig } from "./types";
+import type { AutoConfigureResult, LocalLogEntry, PendingCaptureSubmit, PendingPrintJobReport, PortInfo, PrinterConfig, PrinterInfo, ScaleConfig, StableReading, StationConfig } from "./types";
 
 const BUILD_VERSION = "0.5.5";
 const STATION_PASSWORD_HASH = "412b800684ad737f0b892151ccfd8b45578a413d2607c8ff0a134aeeeffbf186";
@@ -94,19 +94,26 @@ type HeartbeatResult = {
 };
 
 type AutoSessionState = {
-  samples: number[];
   lastCapturedAt: number;
   lastCapturedWeight: number | null;
+  // A balanca voltou ao zero depois da ultima captura, ou seja, a peca anterior
+  // saiu do gancho. Rearma a captura mesmo quando a peca seguinte pesa quase o
+  // mesmo que a anterior — algo comum em carcacas e invisivel para a checagem
+  // de variacao de peso quando a tolerancia e de 100 g.
+  sawZeroSinceCapture: boolean;
 };
 
 type LocalLogLevel = "info" | "warn" | "error";
 
-function isStable(samples: number[], thresholdKg: number) {
-  if (samples.length < 2) return false;
-  const min = Math.min(...samples);
-  const max = Math.max(...samples);
-  return Math.abs(max - min) <= thresholdKg;
-}
+/// Estado da checagem de atualizacao. A instalacao NUNCA parte daqui sozinha:
+/// so `confirmUpdate`, chamado pelo botao, baixa e instala.
+type UpdateCheck =
+  | { status: "idle" }
+  | { status: "checking" }
+  | { status: "current"; version: string }
+  | { status: "available"; version: string }
+  | { status: "installing"; version: string }
+  | { status: "error"; message: string };
 
 function hasFreshAutoSessionLease(session: HardwareSession, nowMs = Date.now()) {
   const rawLeaseAt = typeof session.context.browserLeaseAt === "string" ? session.context.browserLeaseAt : "";
@@ -148,11 +155,13 @@ const defaultConfig: StationConfig = {
     readCommand: "",
     parserRegex: "([-+]?\\d+[\\.,]?\\d*)\\s*kg?",
     stableWindow: 4,
-    stableThresholdKg: 0.02,
-    stableMs: 1200,
+    stableThresholdKg: 0.1,
+    stableMs: 800,
     minWeightKg: 1,
     cooldownMs: 1500,
     zeroThresholdKg: 0.25,
+    stableTimeoutMs: 5000,
+    sampleIntervalMs: 60,
   },
   printer: {
     mode: "windows_spooler",
@@ -263,8 +272,8 @@ export function App() {
   const [resetBusy, setResetBusy] = useState(false);
   const [resetMessage, setResetMessage] = useState("");
   const [appVersion, setAppVersion] = useState(BUILD_VERSION);
-  const [updateBusy, setUpdateBusy] = useState(false);
-  const [updatePrompt, setUpdatePrompt] = useState<{ version: string } | null>(null);
+  const [updateCheck, setUpdateCheck] = useState<UpdateCheck>({ status: "idle" });
+  const updateBusy = updateCheck.status === "checking" || updateCheck.status === "installing";
   const [localLogs, setLocalLogs] = useState<LocalLogEntry[]>([]);
   const [autoConfig, setAutoConfig] = useState<AutoConfigureResult | null>(null);
   const [autoConfigBusy, setAutoConfigBusy] = useState(false);
@@ -276,6 +285,7 @@ export function App() {
   const printedJobs = useRef(new Set<string>());
   const autoSessions = useRef(new Map<string, AutoSessionState>());
   const serviceNextPollMs = useRef(IDLE_SERVICE_POLL_MS);
+  const hasAutoSessionRef = useRef(false);
   const serviceTicking = useRef(false);
   const realtimeConnected = useRef(false);
   const lastServiceErrorLogAt = useRef(0);
@@ -611,7 +621,7 @@ export function App() {
     }
   }
 
-  async function submitCapture(session: HardwareSession, weight: number, commandId: string) {
+  async function submitCapture(session: HardwareSession, weight: number, commandId: string, stable = true) {
     if (!config.token) return;
     const captureId = `${session.id}-${commandId}`;
     const request: PendingCaptureSubmit = {
@@ -620,7 +630,7 @@ export function App() {
       pointId: session.point_id,
       flow: session.flow,
       grossWeight: weight,
-      stable: true,
+      stable,
       payload: { context: session.context },
     };
     await savePendingCaptureSubmit(captureId, request);
@@ -727,13 +737,17 @@ export function App() {
       processingCommands.current.add(commandId);
       try {
         const scale = scaleForSession(session);
-        const weight = await readScaleOnce(scale);
+        // Forcar leitura tambem espera a balanca assentar; se o tempo limite
+        // estourar, envia a ultima leitura marcada como instavel em vez de
+        // devolver um valor colhido no meio do balanco.
+        const reading = await readScaleStable(scale);
+        const weight = reading.weightKg;
         setLastWeight(weight);
         if (weight < scale.minWeightKg) {
           handledCommands.current.add(commandId);
           throw new Error(`Peso ${weight.toFixed(3)} kg abaixo do minimo ${scale.minWeightKg.toFixed(3)} kg.`);
         }
-        await submitCapture(session, weight, commandId);
+        await submitCapture(session, weight, commandId, reading.stable);
         handledCommands.current.add(commandId);
       } catch (error) {
         setStatus(error instanceof Error ? error.message : "Falha ao capturar peso.");
@@ -745,28 +759,44 @@ export function App() {
     for (const session of sessions) {
       if (session.mode !== "AUTO" || session.status !== "ACTIVE") continue;
       if (!hasFreshAutoSessionLease(session, Number.isFinite(serverNowMs) ? serverNowMs : Date.now())) continue;
-      const state = autoSessions.current.get(session.id) ?? { samples: [], lastCapturedAt: 0, lastCapturedWeight: null };
+      const state = autoSessions.current.get(session.id)
+        ?? { lastCapturedAt: 0, lastCapturedWeight: null, sawZeroSinceCapture: true };
       const scale = scaleForSession(session);
-      const weight = await readScaleOnce(scale);
+
+      // A estabilizacao inteira acontece dentro de uma unica chamada nativa,
+      // com a porta aberta e dezenas de amostras por segundo. Antes era uma
+      // amostra por ciclo de servico (poll + HTTP + abrir/fechar a serial),
+      // o que fazia cada peca levar dezenas de segundos para fechar peso.
+      let reading: StableReading;
+      try {
+        reading = await readScaleStable(scale);
+      } catch (error) {
+        // Balanca desconectada ou sem resposta nao pode derrubar o tick: o
+        // catch externo colocava o polling em modo ocioso e a proxima pesagem
+        // so acontecia quando o Realtime acordasse o agente.
+        autoSessions.current.set(session.id, state);
+        recordLocalLog("warn", "Falha ao ler a balanca na captura automatica.", {
+          sessionId: session.id,
+          flow: session.flow,
+          error: errorMessage(error, "Falha ao ler a balanca."),
+        });
+        continue;
+      }
+
+      const weight = reading.weightKg;
       setLastWeight(weight);
 
       if (weight <= scale.zeroThresholdKg) {
-        state.samples = [];
         state.lastCapturedWeight = null;
+        state.sawZeroSinceCapture = true;
         autoSessions.current.set(session.id, state);
         continue;
       }
 
-      state.samples = [...state.samples, weight].slice(-Math.max(2, scale.stableWindow));
       const cooldownElapsed = Date.now() - state.lastCapturedAt >= scale.cooldownMs;
-      const weightChanged = hasMeaningfulWeightChange(weight, state.lastCapturedWeight, scale.stableThresholdKg);
-      if (
-        cooldownElapsed &&
-        weightChanged &&
-        weight >= scale.minWeightKg &&
-        state.samples.length >= Math.max(2, scale.stableWindow) &&
-        isStable(state.samples, scale.stableThresholdKg)
-      ) {
+      const weightChanged = state.sawZeroSinceCapture
+        || hasMeaningfulWeightChange(weight, state.lastCapturedWeight, scale.stableThresholdKg);
+      if (reading.stable && cooldownElapsed && weightChanged && weight >= scale.minWeightKg) {
         // Marca o peso como capturado ANTES de tentar enviar. submitCapture
         // salva a captura como pendente local e o flushPendingCaptures reenvia
         // se o POST falhar. Sem isso, um envio inicial que falha (rede,
@@ -774,7 +804,7 @@ export function App() {
         // duplicado para a mesma peca com captureId novo.
         state.lastCapturedAt = Date.now();
         state.lastCapturedWeight = weight;
-        state.samples = [];
+        state.sawZeroSinceCapture = false;
         try {
           await submitCapture(session, weight, makeAutoCaptureKey());
         } catch (error) {
@@ -790,6 +820,7 @@ export function App() {
     }
 
     const hasAutoSession = sessions.some((s) => s.mode === "AUTO" && s.status === "ACTIVE");
+    hasAutoSessionRef.current = hasAutoSession;
     if (hasAutoSession) {
       serviceNextPollMs.current = Math.min(serviceNextPollMs.current, AUTO_POLL_MS);
     }
@@ -830,7 +861,13 @@ export function App() {
             serverUrl: config.serverUrl,
           });
         }
-        serviceNextPollMs.current = IDLE_SERVICE_POLL_MS;
+        // Com uma sessao automatica aberta o operador esta com uma peca no
+        // gancho: cair para o intervalo ocioso (5 min) deixaria a estacao
+        // parada ate o Realtime acordar o agente. Recua so ate o intervalo
+        // ativo, o suficiente para nao martelar um servidor com problema.
+        serviceNextPollMs.current = hasAutoSessionRef.current
+          ? ACTIVE_SERVICE_POLL_MS
+          : IDLE_SERVICE_POLL_MS;
       } finally {
         serviceTicking.current = false;
         schedule(serviceNextPollMs.current);
@@ -1054,38 +1091,49 @@ export function App() {
     setResetMessage("");
   }
 
+  /// Consulta o servidor de releases. Cada clique refaz a consulta, inclusive
+  /// depois de ja ter encontrado uma versao nova. Nunca instala nada.
   async function handleCheckUpdate() {
-    setUpdateBusy(true);
-    setUpdatePrompt(null);
+    if (updateBusy) return;
+    setUpdateCheck({ status: "checking" });
     setStatus("Procurando atualizacao...");
     try {
       const result = await checkUpdate();
       if (result.available && result.version) {
-        setUpdatePrompt({ version: result.version });
-        setStatus(`Nova versao ${result.version} disponivel.`);
+        setUpdateCheck({ status: "available", version: result.version });
+        setStatus(`Nova versao ${result.version} disponivel. A atualizacao so acontece se voce clicar em atualizar.`);
       } else {
+        setUpdateCheck({ status: "current", version: result.current });
         setStatus(`Voce ja esta na versao mais recente (v${result.current}).`);
       }
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Falha ao procurar atualizacao.");
-    } finally {
-      setUpdateBusy(false);
+      const message = errorMessage(error, "Falha ao procurar atualizacao.");
+      setUpdateCheck({ status: "error", message });
+      setStatus(message);
     }
   }
 
+  /// Unico caminho que baixa e instala. So e alcancavel pelo botao de
+  /// confirmacao, depois de uma checagem ter encontrado versao nova.
   async function confirmUpdate() {
-    setUpdateBusy(true);
+    if (updateCheck.status !== "available") return;
+    const version = updateCheck.version;
+    setUpdateCheck({ status: "installing", version });
     setStatus("Baixando e instalando atualizacao... O app sera reiniciado.");
     try {
       await installUpdate();
       // Em caso de sucesso o app reinicia; se retornar, apenas informa.
+      setUpdateCheck({ status: "idle" });
       setStatus("Atualizacao concluida.");
-      setUpdatePrompt(null);
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Falha ao instalar atualizacao.");
-    } finally {
-      setUpdateBusy(false);
+      const message = errorMessage(error, "Falha ao instalar atualizacao.");
+      setUpdateCheck({ status: "error", message });
+      setStatus(message);
     }
+  }
+
+  function dismissUpdateCheck() {
+    setUpdateCheck({ status: "idle" });
   }
 
   async function resetPrinter() {
@@ -1167,7 +1215,52 @@ export function App() {
             {isEnrolled ? <CheckCircle2 size={16} /> : <WifiOff size={16} />}
             {isEnrolled ? "Matriculado" : "Nao matriculado"}
           </div>
-          <span className="version-badge">v{appVersion}</span>
+          <div className="version-menu">
+            <button
+              className={`version-badge-button${updateCheck.status === "available" ? " has-update" : ""}`}
+              onClick={() => void handleCheckUpdate()}
+              disabled={updateBusy}
+              title="Clique para procurar uma versao nova. O app nunca atualiza sozinho."
+            >
+              <RefreshCw size={14} className={updateBusy ? "spinning" : undefined} />
+              v{appVersion}
+              {updateCheck.status === "available" && <span className="version-dot" aria-hidden="true" />}
+            </button>
+            {updateCheck.status !== "idle" && (
+              <div className="version-popover">
+                {updateCheck.status === "checking" && <p className="version-popover-text">Procurando atualizacao...</p>}
+                {updateCheck.status === "current" && (
+                  <>
+                    <p className="version-popover-text">Voce ja esta na versao mais recente (v{updateCheck.version}).</p>
+                    <button className="secondary" onClick={dismissUpdateCheck}>Fechar</button>
+                  </>
+                )}
+                {updateCheck.status === "available" && (
+                  <>
+                    <p className="version-popover-text">
+                      <strong>Versao {updateCheck.version} disponivel.</strong> Voce esta na v{appVersion}. O app sera
+                      reiniciado ao atualizar.
+                    </p>
+                    <div className="row">
+                      <button onClick={() => void confirmUpdate()}>
+                        <Zap size={15} /> Atualizar para {updateCheck.version}
+                      </button>
+                      <button className="secondary" onClick={dismissUpdateCheck}>Agora nao</button>
+                    </div>
+                  </>
+                )}
+                {updateCheck.status === "installing" && (
+                  <p className="version-popover-text">Baixando e instalando a versao {updateCheck.version}...</p>
+                )}
+                {updateCheck.status === "error" && (
+                  <>
+                    <p className="version-popover-text error">{updateCheck.message}</p>
+                    <button className="secondary" onClick={dismissUpdateCheck}>Fechar</button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
           <button className="ghost lock-button" onClick={lockStation} title="Bloquear estacao">
             <Lock size={15} /> Bloquear
           </button>
@@ -1256,12 +1349,20 @@ export function App() {
                 <div><FieldLabel help="Peso minimo bruto para aceitar captura automatica ou manual.">Peso minimo kg</FieldLabel><input type="number" value={scale.minWeightKg} onChange={(e) => updateScaleAt(index, { minWeightKg: Number(e.target.value) })} /></div>
               </div>
               <div className="split">
-                <div><FieldLabel help="Quantidade de leituras seguidas usadas para decidir se o peso estabilizou.">Janela estabilidade</FieldLabel><input type="number" min="2" value={scale.stableWindow} onChange={(e) => updateScaleAt(index, { stableWindow: Number(e.target.value) })} /></div>
-                <div><FieldLabel help="Variacao maxima, em kg, permitida dentro da janela de estabilidade.">Tolerancia kg</FieldLabel><input type="number" step="0.001" value={scale.stableThresholdKg} onChange={(e) => updateScaleAt(index, { stableThresholdKg: Number(e.target.value) })} /></div>
+                <div><FieldLabel help="Minimo de leituras dentro da janela de tempo para aceitar o peso. Aumente se a balanca oscila muito.">Amostras minimas</FieldLabel><input type="number" min="2" value={scale.stableWindow} onChange={(e) => updateScaleAt(index, { stableWindow: Number(e.target.value) })} /></div>
+                <div><FieldLabel help="Variacao maxima, em kg, permitida na janela de estabilidade. 0,1 = aceita 100 g de oscilacao (recomendado para carcacas no trilho).">Tolerancia kg</FieldLabel><input type="number" step="0.001" value={scale.stableThresholdKg} onChange={(e) => updateScaleAt(index, { stableThresholdKg: Number(e.target.value) })} /></div>
               </div>
               <div className="split">
+                <div><FieldLabel help="Por quanto tempo o peso precisa ficar dentro da tolerancia para valer como estavel. Valores menores pesam mais rapido; maiores exigem a peca mais parada.">Estabilidade ms</FieldLabel><input type="number" min="100" step="100" value={scale.stableMs} onChange={(e) => updateScaleAt(index, { stableMs: Number(e.target.value) })} /></div>
+                <div><FieldLabel help="Tempo maximo esperando a peca assentar antes de desistir da leitura.">Tempo limite ms</FieldLabel><input type="number" min="500" step="500" value={scale.stableTimeoutMs} onChange={(e) => updateScaleAt(index, { stableTimeoutMs: Number(e.target.value) })} /></div>
+              </div>
+              <div className="split">
+                <div><FieldLabel help="Espera maxima por cada resposta da balanca. Nao e pausa fixa: a leitura segue assim que o peso chega.">Intervalo amostra ms</FieldLabel><input type="number" min="20" max="1000" step="10" value={scale.sampleIntervalMs} onChange={(e) => updateScaleAt(index, { sampleIntervalMs: Number(e.target.value) })} /></div>
                 <div><FieldLabel help="Espera minima entre duas capturas automaticas, em milissegundos.">Cooldown ms</FieldLabel><input type="number" min="0" value={scale.cooldownMs} onChange={(e) => updateScaleAt(index, { cooldownMs: Number(e.target.value) })} /></div>
-                <div><FieldLabel help="Peso considerado balanca vazia; limpa a referencia da ultima captura.">Zero kg</FieldLabel><input type="number" step="0.001" value={scale.zeroThresholdKg} onChange={(e) => updateScaleAt(index, { zeroThresholdKg: Number(e.target.value) })} /></div>
+              </div>
+              <div className="split">
+                <div><FieldLabel help="Peso considerado balanca vazia; libera a captura da proxima peca.">Zero kg</FieldLabel><input type="number" step="0.001" value={scale.zeroThresholdKg} onChange={(e) => updateScaleAt(index, { zeroThresholdKg: Number(e.target.value) })} /></div>
+                <div />
               </div>
               <FieldLabel help="Regra usada para extrair o numero do peso do texto enviado pela balanca.">Regex parser</FieldLabel>
               <input value={scale.parserRegex} onChange={(e) => updateScaleAt(index, { parserRegex: e.target.value })} />
@@ -1389,7 +1490,7 @@ export function App() {
         {activeTab === "servico" && (
         <div className="panel service-panel">
           <h2><PlugZap size={18} /> Servico</h2>
-          <p className="section-kicker">Versao {appVersion}. Atualizacoes sao manuais (botao abaixo).</p>
+          <p className="section-kicker">Versao {appVersion}. O app nunca atualiza sozinho: use o botao da versao no topo ou o botao abaixo.</p>
           <div className="actions">
             <button onClick={() => persist()} disabled={isBusy}><Save size={15} /> Salvar</button>
             <button className="secondary" onClick={heartbeat} disabled={!isEnrolled || isBusy}>Heartbeat</button>
@@ -1400,14 +1501,14 @@ export function App() {
               <RefreshCw size={15} /> {updateBusy ? "Verificando..." : "Procurar atualizacao"}
             </button>
           </div>
-          {updatePrompt && (
+          {updateCheck.status === "available" && (
             <div className="auto-config">
-              <p className="auto-config-message">Nova versao {updatePrompt.version} disponivel. Deseja atualizar agora? O app sera reiniciado.</p>
+              <p className="auto-config-message">Nova versao {updateCheck.version} disponivel. Deseja atualizar agora? O app sera reiniciado.</p>
               <div className="row">
                 <button onClick={() => void confirmUpdate()} disabled={updateBusy}>
                   <Zap size={15} /> Sim, atualizar
                 </button>
-                <button className="secondary" onClick={() => setUpdatePrompt(null)} disabled={updateBusy}>Agora nao</button>
+                <button className="secondary" onClick={dismissUpdateCheck} disabled={updateBusy}>Agora nao</button>
               </div>
             </div>
           )}

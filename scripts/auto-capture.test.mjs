@@ -19,6 +19,43 @@ test("automatic capture uses lease, cooldown, and weight-change rearm", async ()
   assert.ok(source.includes("AUTO_POLL_MS"), "auto polling must have its own faster poll interval");
   assert.ok(source.includes("hasAutoSession"), "auto polling must accelerate when auto sessions are active");
   assert.equal(source.includes("stableWindow: 5"), false, "default stability window must not keep the old slow value");
+  assert.ok(
+    source.includes("sawZeroSinceCapture"),
+    "returning to zero must rearm capture, otherwise two carcasses within the tolerance in a row lose the second label",
+  );
+});
+
+test("stabilisation happens natively instead of one sample per service tick", async () => {
+  const source = await readFile(appPath, "utf8");
+  const apiSource = await readFile(apiPath, "utf8");
+
+  // Uma amostra por tick custava o poll (1s) + o round-trip HTTP do heartbeat +
+  // abrir/fechar a serial, entao fechar peso levava dezenas de segundos. A
+  // estabilizacao inteira precisa acontecer numa unica chamada nativa.
+  assert.ok(apiSource.includes("read_scale_stable"), "frontend API must expose the native stabilised read");
+  assert.ok(source.includes("await readScaleStable(scale)"), "auto loop must stabilise inside a single native call");
+  assert.equal(
+    source.includes("state.samples"),
+    false,
+    "auto loop must not rebuild the stability window across service ticks",
+  );
+  assert.ok(source.includes("reading.stable"), "auto loop must only capture readings the native layer marked stable");
+});
+
+test("scale read failures do not park the service loop", async () => {
+  const source = await readFile(appPath, "utf8");
+
+  // Um frame instavel (TI200 responde III,III enquanto a peca balanca) lancava
+  // erro, derrubava o serviceTick inteiro e jogava o polling para o intervalo
+  // ocioso de 5 min; a pesagem seguinte so acontecia quando o Realtime
+  // acordasse o agente.
+  const loopMatch = source.match(/reading = await readScaleStable\(scale\);[\s\S]*?continue;/);
+  assert.ok(loopMatch, "auto loop must guard the scale read with its own try/catch");
+  assert.ok(/\}\s*catch \(error\) \{/.test(loopMatch[0]), "scale read failure must be caught inside the session loop");
+  assert.ok(
+    /serviceNextPollMs\.current = hasAutoSessionRef\.current\s*\?\s*ACTIVE_SERVICE_POLL_MS\s*:\s*IDLE_SERVICE_POLL_MS/.test(source),
+    "service errors must not fall back to the idle poll while an auto session is open",
+  );
 });
 
 test("automatic capture ids are unique beyond millisecond timestamps", async () => {
@@ -77,8 +114,10 @@ test("station fields include short operator help tooltips", async () => {
   assert.ok(source.includes("function FieldLabel"), "UI must use a shared label helper for field help");
   assert.ok(source.includes('className="help-tip"'), "field help must render visible question-mark tips");
   assert.ok(source.includes('Peso minimo kg</FieldLabel>'), "minimum weight field must explain capture threshold");
-  assert.ok(source.includes('Janela estabilidade</FieldLabel>'), "stability window field must have operator help");
+  assert.ok(source.includes('Amostras minimas</FieldLabel>'), "minimum sample field must have operator help");
   assert.ok(source.includes('Tolerancia kg</FieldLabel>'), "stability tolerance field must have operator help");
+  assert.ok(source.includes('Estabilidade ms</FieldLabel>'), "stability period field must have operator help");
+  assert.ok(source.includes('Tempo limite ms</FieldLabel>'), "stabilisation timeout field must have operator help");
   assert.ok(source.includes('Cooldown ms</FieldLabel>'), "cooldown field must have operator help");
   assert.ok(source.includes('Zero kg</FieldLabel>'), "zero threshold field must have operator help");
 });
@@ -90,7 +129,7 @@ test("auto capture rearms the last-captured weight before submit to avoid duplic
   // awaiting submitCapture, otherwise a transient send failure (network/timeout)
   // leaves the state clean and flushPendingCaptures re-submits the same piece
   // with a brand-new captureId, creating a duplicate volume.
-  const loopMatch = source.match(/if \([\s\S]*?isStable\(state\.samples[\s\S]*?autoSessions\.current\.set\(session\.id, state\);/);
+  const loopMatch = source.match(/if \(reading\.stable && cooldownElapsed[\s\S]*?autoSessions\.current\.set\(session\.id, state\);/);
   assert.ok(loopMatch, "auto-capture must keep the state update inside the per-session block");
   const block = loopMatch[0];
   const stateUpdateIndex = block.search(/state\.lastCapturedWeight\s*=\s*weight/);
@@ -105,4 +144,53 @@ test("auto capture rearms the last-captured weight before submit to avoid duplic
     /try\s*\{[\s\S]*await submitCapture\(session, weight, makeAutoCaptureKey\(\)\);[\s\S]*\}\s*catch/.test(block),
     "auto-capture must catch submitCapture errors so state stays consistent and flushPendingCaptures can retry",
   );
+});
+
+test("updates only ever install from an explicit click", async () => {
+  const source = await readFile(appPath, "utf8");
+  const libPath = new URL("../src-tauri/src/lib.rs", import.meta.url);
+  const libSource = await readFile(libPath, "utf8");
+
+  // A estacao fica num ponto de pesagem: uma atualizacao disparada sozinha
+  // reinicia o app no meio do recebimento. Instalar so pode partir do botao.
+  assert.ok(source.includes("async function confirmUpdate()"), "install must live behind its own confirm handler");
+  const installCalls = source.match(/await installUpdate\(\)/g) ?? [];
+  assert.equal(installCalls.length, 1, "installUpdate must have exactly one call site");
+
+  const confirmBlock = source.match(/async function confirmUpdate\(\)[\s\S]*?\n  \}/);
+  assert.ok(confirmBlock, "confirmUpdate must be readable as a block");
+  assert.ok(
+    confirmBlock[0].includes("await installUpdate()"),
+    "the only installUpdate call must sit inside confirmUpdate",
+  );
+  assert.ok(
+    /if \(updateCheck\.status !== "available"\) return;/.test(confirmBlock[0]),
+    "confirmUpdate must refuse to install unless a check found a newer version",
+  );
+
+  // Nenhum useEffect pode chamar a checagem ou a instalacao no arranque.
+  for (const effect of source.match(/useEffect\(\(\) => \{[\s\S]*?\n  \}, \[[^\]]*\]\);/g) ?? []) {
+    assert.equal(effect.includes("installUpdate"), false, "no effect may install an update on its own");
+    assert.equal(effect.includes("handleCheckUpdate"), false, "no effect may check for updates on its own");
+  }
+
+  // O plugin do Tauri tambem nao pode instalar por conta propria no setup.
+  assert.equal(
+    /download_and_install/.test(libSource.replace(/async fn install_update[\s\S]*?\n\}/, "")),
+    false,
+    "download_and_install must only exist inside the install_update command",
+  );
+});
+
+test("the topbar version button drives the manual update flow", async () => {
+  const source = await readFile(appPath, "utf8");
+
+  assert.ok(source.includes("version-badge-button"), "the current version must be a clickable button in the topbar");
+  assert.ok(
+    /version-badge-button[\s\S]{0,240}onClick=\{\(\) => void handleCheckUpdate\(\)\}/.test(source),
+    "clicking the version button must re-run the check",
+  );
+  assert.ok(source.includes('updateCheck.status === "available"'), "a newer version must surface an update action");
+  assert.ok(source.includes("Atualizar para "), "the update action must name the target version");
+  assert.ok(source.includes("dismissUpdateCheck"), "the operator must be able to dismiss the prompt without updating");
 });

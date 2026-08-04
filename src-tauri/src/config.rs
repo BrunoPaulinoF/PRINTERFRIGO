@@ -22,6 +22,22 @@ pub struct ScaleConfig {
     pub min_weight_kg: f64,
     pub cooldown_ms: u64,
     pub zero_threshold_kg: f64,
+    /// Tempo maximo, em ms, que `read_scale_stable` fica amostrando a balanca
+    /// antes de desistir e devolver a ultima leitura como instavel.
+    #[serde(default = "default_stable_timeout_ms")]
+    pub stable_timeout_ms: u64,
+    /// Espera maxima, em ms, por uma resposta da balanca a cada amostra.
+    /// Nao e um sleep fixo: a leitura retorna assim que o frame chega.
+    #[serde(default = "default_sample_interval_ms")]
+    pub sample_interval_ms: u64,
+}
+
+fn default_stable_timeout_ms() -> u64 {
+    5000
+}
+
+fn default_sample_interval_ms() -> u64 {
+    60
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

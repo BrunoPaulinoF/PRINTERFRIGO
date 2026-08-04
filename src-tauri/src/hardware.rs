@@ -177,6 +177,12 @@ fn decode_frame_bytes(bytes: &[u8], parser_regex: &str) -> String {
     String::from_utf8_lossy(bytes).to_string()
 }
 
+/// Folga de comparacao em kg (1 mg). Sem ela, uma tolerancia de 0,100 kg
+/// rejeita uma variacao de exatamente 100 g: 42.5 - 42.4 da 0.10000000000000142
+/// em f64. Fica muitas ordens de grandeza abaixo da resolucao de qualquer
+/// balanca industrial, entao nao afrouxa o criterio na pratica.
+const WEIGHT_EPSILON_KG: f64 = 1e-6;
+
 #[allow(dead_code)]
 pub fn is_stable(samples: &[f64], threshold_kg: f64) -> bool {
     if samples.len() < 2 {
@@ -184,7 +190,52 @@ pub fn is_stable(samples: &[f64], threshold_kg: f64) -> bool {
     }
     let min = samples.iter().copied().fold(f64::INFINITY, f64::min);
     let max = samples.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    (max - min).abs() <= threshold_kg
+    (max - min).abs() <= threshold_kg + WEIGHT_EPSILON_KG
+}
+
+/// Amostra de peso com o instante (ms desde o inicio da leitura) em que chegou.
+#[derive(Debug, Clone, Copy)]
+pub struct WeightSample {
+    pub at_ms: u64,
+    pub weight_kg: f64,
+}
+
+/// Decide se a balanca estabilizou olhando SO para a janela de tempo mais
+/// recente (`stable_ms`), e nao para as N ultimas amostras.
+///
+/// A diferenca importa numa carcaca balancando no trilho: duas leituras
+/// separadas por 2s podem cair por acaso dentro da tolerancia no meio do
+/// balanco. Exigir que TODAS as leituras dos ultimos ~800ms fiquem dentro da
+/// tolerancia so acontece quando a peca realmente parou.
+pub fn evaluate_stability(
+    samples: &[WeightSample],
+    now_ms: u64,
+    stable_ms: u64,
+    min_samples: usize,
+    threshold_kg: f64,
+) -> Option<f64> {
+    let min_samples = min_samples.max(2);
+    let window_start = now_ms.saturating_sub(stable_ms.max(1));
+    let window: Vec<f64> = samples
+        .iter()
+        .filter(|sample| sample.at_ms >= window_start)
+        .map(|sample| sample.weight_kg)
+        .collect();
+    if window.len() < min_samples {
+        return None;
+    }
+    // A janela so vale se cobrir o periodo pedido; senao um burst rapido de
+    // leituras logo apos o inicio passaria como estavel.
+    let oldest = samples.iter().find(|sample| sample.at_ms >= window_start)?;
+    if now_ms.saturating_sub(oldest.at_ms) + 1 < stable_ms {
+        return None;
+    }
+    if !is_stable(&window, threshold_kg) {
+        return None;
+    }
+    // Devolve a ultima leitura, nao a media: preserva o valor exato mostrado no
+    // indicador (todas as amostras da janela estao dentro da tolerancia).
+    window.last().copied()
 }
 
 #[tauri::command]
@@ -620,6 +671,238 @@ pub fn read_scale_once(config: ScaleConfig) -> Result<f64, String> {
         .map_err(|err| err.to_string())?;
     let frame = decode_frame_bytes(&buffer[..read], &config.parser_regex);
     parse_weight_frame(&frame, &config.parser_regex)
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StableReading {
+    pub weight_kg: f64,
+    pub stable: bool,
+    pub samples: usize,
+    pub elapsed_ms: u64,
+    pub reason: String,
+}
+
+/// Canal aberto com a balanca. Existe para que a leitura de estabilizacao
+/// abra a porta UMA vez e fique amostrando, em vez de abrir/fechar a cada
+/// amostra (que custava ~500ms de sleep fixo por leitura).
+enum ScaleLink {
+    Serial(Box<dyn SerialPort>),
+    Tcp(TcpStream),
+}
+
+impl ScaleLink {
+    fn discard_input(&mut self) {
+        // Balanca em transmissao continua enche o buffer; sem limpar, a
+        // proxima leitura seria um frame velho de varios segundos atras.
+        if let ScaleLink::Serial(port) = self {
+            let _ = port.clear(serialport::ClearBuffer::Input);
+        }
+    }
+}
+
+impl Read for ScaleLink {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            ScaleLink::Serial(port) => port.read(buffer),
+            ScaleLink::Tcp(stream) => stream.read(buffer),
+        }
+    }
+}
+
+impl Write for ScaleLink {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        match self {
+            ScaleLink::Serial(port) => port.write(buffer),
+            ScaleLink::Tcp(stream) => stream.write(buffer),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            ScaleLink::Serial(port) => port.flush(),
+            ScaleLink::Tcp(stream) => stream.flush(),
+        }
+    }
+}
+
+fn open_scale_link(config: &ScaleConfig, read_timeout: Duration) -> Result<ScaleLink, String> {
+    if config.mode.as_deref() == Some("tcp") {
+        let host = config
+            .host
+            .as_ref()
+            .filter(|value| !value.is_empty())
+            .ok_or("Host TCP da balanca nao configurado.".to_string())?;
+        let port = if config.port.is_empty() {
+            "4001".to_string()
+        } else {
+            config.port.clone()
+        };
+        let port_num = port
+            .parse::<u16>()
+            .map_err(|_| format!("Porta TCP invalida: {port}"))?;
+        let stream = TcpStream::connect((host.as_str(), port_num))
+            .map_err(|err| format!("Falha ao conectar na balanca TCP {host}:{port_num}: {err}"))?;
+        stream
+            .set_read_timeout(Some(read_timeout))
+            .map_err(|err| err.to_string())?;
+        return Ok(ScaleLink::Tcp(stream));
+    }
+
+    if config.port.trim().is_empty() {
+        return Err("Porta serial da balanca nao configurada.".to_string());
+    }
+
+    let mut builder = serialport::new(config.port.clone(), config.baud_rate).timeout(read_timeout);
+    builder = builder.data_bits(match config.data_bits {
+        5 => serialport::DataBits::Five,
+        6 => serialport::DataBits::Six,
+        7 => serialport::DataBits::Seven,
+        _ => serialport::DataBits::Eight,
+    });
+    builder = builder.stop_bits(if config.stop_bits == 2 {
+        serialport::StopBits::Two
+    } else {
+        serialport::StopBits::One
+    });
+    builder = builder.parity(match config.parity.as_str() {
+        "odd" => serialport::Parity::Odd,
+        "even" => serialport::Parity::Even,
+        _ => serialport::Parity::None,
+    });
+
+    let mut port = builder.open().map_err(|err| err.to_string())?;
+    // O settle de DTR/RTS acontece uma unica vez por sessao de leitura.
+    prepare_serial_port(port.as_mut())?;
+    Ok(ScaleLink::Serial(port))
+}
+
+/// Pede e le UMA amostra no canal ja aberto. Nao usa sleep fixo: retorna assim
+/// que um frame com peso chega, ou quando `wait` estoura.
+fn sample_scale(link: &mut ScaleLink, config: &ScaleConfig, wait: Duration) -> Result<f64, String> {
+    link.discard_input();
+    if let Some(command) = config
+        .read_command
+        .as_ref()
+        .filter(|value| !value.is_empty())
+    {
+        link.write_all(&command_bytes(command))
+            .map_err(|err| err.to_string())?;
+        link.flush().map_err(|err| err.to_string())?;
+    }
+
+    let deadline = Instant::now() + wait;
+    let mut accumulated: Vec<u8> = Vec::new();
+    let mut buffer = vec![0_u8; 256];
+    loop {
+        match link.read(buffer.as_mut_slice()) {
+            Ok(0) => std::thread::sleep(Duration::from_millis(5)),
+            Ok(read) => {
+                accumulated.extend_from_slice(&buffer[..read]);
+                let frame = decode_frame_bytes(&accumulated, &config.parser_regex);
+                match parse_weight_frame(&frame, &config.parser_regex) {
+                    Ok(weight) => return Ok(weight),
+                    Err(err) => {
+                        // "instavel", "sobrecarga" e "negativo" sao status que o
+                        // indicador afirma; nao adianta esperar mais bytes.
+                        if err.contains("instavel") || err.contains("sobrecarga") || err.contains("negativo") {
+                            return Err(err);
+                        }
+                    }
+                }
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::TimedOut => {}
+            Err(err) => return Err(err.to_string()),
+        }
+        if Instant::now() >= deadline {
+            return Err("Balanca nao respondeu dentro do intervalo de amostragem.".to_string());
+        }
+    }
+}
+
+/// Le a balanca ate ela estabilizar, mantendo a porta aberta entre as amostras.
+///
+/// Substitui o padrao antigo de uma amostra por ciclo de heartbeat: ali cada
+/// leitura custava o poll (1s) + o round-trip HTTP + 500ms de sleep fixo na
+/// serial, entao juntar 2 leituras estaveis levava dezenas de segundos.
+#[tauri::command]
+pub fn read_scale_stable(config: ScaleConfig) -> Result<StableReading, String> {
+    let stable_ms = config.stable_ms.max(1);
+    let timeout_ms = config.stable_timeout_ms.max(stable_ms + 500);
+    let sample_wait = Duration::from_millis(config.sample_interval_ms.clamp(20, 1000));
+
+    if config.mode.as_deref() == Some("simulated") {
+        let weight = config.simulated_weight_kg.unwrap_or(12.345);
+        if weight <= 0.0 {
+            return Err("Peso simulado precisa ser maior que zero.".to_string());
+        }
+        return Ok(StableReading {
+            weight_kg: weight,
+            stable: true,
+            samples: config.stable_window.max(2),
+            elapsed_ms: 0,
+            reason: "simulado".to_string(),
+        });
+    }
+
+    let mut link = open_scale_link(&config, sample_wait)?;
+    let started = Instant::now();
+    let mut samples: Vec<WeightSample> = Vec::new();
+    let mut last_weight: Option<f64> = None;
+    let mut last_error: Option<String> = None;
+
+    loop {
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        match sample_scale(&mut link, &config, sample_wait) {
+            Ok(weight) => {
+                last_weight = Some(weight);
+                samples.push(WeightSample {
+                    at_ms: elapsed_ms,
+                    weight_kg: weight,
+                });
+                // Guarda so o necessario para cobrir a janela de estabilidade.
+                let cutoff = elapsed_ms.saturating_sub(stable_ms * 2);
+                samples.retain(|sample| sample.at_ms >= cutoff);
+                if let Some(stable_weight) = evaluate_stability(
+                    &samples,
+                    elapsed_ms,
+                    stable_ms,
+                    config.stable_window,
+                    config.stable_threshold_kg,
+                ) {
+                    return Ok(StableReading {
+                        weight_kg: stable_weight,
+                        stable: true,
+                        samples: samples.len(),
+                        elapsed_ms: started.elapsed().as_millis() as u64,
+                        reason: "estavel".to_string(),
+                    });
+                }
+            }
+            Err(err) => {
+                // Frame instavel ou perdido nao aborta a leitura: e justamente o
+                // sinal de que a peca ainda esta balancando. Zera a janela para
+                // nao costurar amostras de antes e depois do movimento.
+                samples.clear();
+                last_error = Some(err);
+            }
+        }
+
+        if started.elapsed().as_millis() as u64 >= timeout_ms {
+            let elapsed_ms = started.elapsed().as_millis() as u64;
+            return match last_weight {
+                Some(weight) => Ok(StableReading {
+                    weight_kg: weight,
+                    stable: false,
+                    samples: samples.len(),
+                    elapsed_ms,
+                    reason: last_error.unwrap_or_else(|| "Peso nao estabilizou no tempo limite.".to_string()),
+                }),
+                None => Err(last_error
+                    .unwrap_or_else(|| "Balanca nao respondeu durante a leitura.".to_string())),
+            };
+        }
+    }
 }
 
 #[tauri::command]
@@ -1081,6 +1364,70 @@ mod tests {
         assert!(!is_stable(&[20.010, 20.080, 20.020], 0.02));
     }
 
+    fn sampled(points: &[(u64, f64)]) -> Vec<WeightSample> {
+        points
+            .iter()
+            .map(|(at_ms, weight_kg)| WeightSample {
+                at_ms: *at_ms,
+                weight_kg: *weight_kg,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn stability_accepts_carcass_within_100g_over_the_full_window() {
+        let samples = sampled(&[
+            (0, 42.5),
+            (200, 42.4),
+            (400, 42.5),
+            (600, 42.5),
+            (800, 42.4),
+        ]);
+        let weight = evaluate_stability(&samples, 800, 800, 4, 0.1).expect("deveria estabilizar");
+        assert!((weight - 42.4).abs() < 0.0001);
+    }
+
+    #[test]
+    fn stability_rejects_swing_larger_than_tolerance() {
+        let samples = sampled(&[
+            (0, 42.5),
+            (200, 43.1),
+            (400, 42.3),
+            (600, 43.0),
+            (800, 42.6),
+        ]);
+        assert!(evaluate_stability(&samples, 800, 800, 4, 0.1).is_none());
+    }
+
+    #[test]
+    fn stability_requires_the_window_to_cover_the_configured_period() {
+        // Rajada rapida de leituras iguais logo no inicio nao pode passar por
+        // estavel: e exatamente o topo do balanco, onde a peca parece parada.
+        let samples = sampled(&[(0, 42.5), (60, 42.5), (120, 42.5), (180, 42.5)]);
+        assert!(evaluate_stability(&samples, 180, 800, 4, 0.1).is_none());
+    }
+
+    #[test]
+    fn stability_ignores_samples_older_than_the_window() {
+        // Peso antigo (peca anterior) nao pode contaminar a janela atual.
+        let samples = sampled(&[
+            (0, 30.0),
+            (1000, 42.5),
+            (1200, 42.5),
+            (1400, 42.5),
+            (1600, 42.5),
+            (1800, 42.5),
+        ]);
+        let weight = evaluate_stability(&samples, 1800, 800, 4, 0.1).expect("deveria estabilizar");
+        assert!((weight - 42.5).abs() < 0.0001);
+    }
+
+    #[test]
+    fn stability_requires_the_minimum_sample_count() {
+        let samples = sampled(&[(0, 42.5), (900, 42.5)]);
+        assert!(evaluate_stability(&samples, 900, 800, 4, 0.1).is_none());
+    }
+
     #[test]
     fn reads_simulated_scale() {
         let config = ScaleConfig {
@@ -1100,6 +1447,8 @@ mod tests {
             min_weight_kg: 1.0,
             cooldown_ms: 1500,
             zero_threshold_kg: 0.25,
+            stable_timeout_ms: 5000,
+            sample_interval_ms: 60,
         };
         let weight = read_scale_once(config).unwrap();
         assert!((weight - 12.345).abs() < 0.0001);
@@ -1214,6 +1563,8 @@ mod tests {
             min_weight_kg: 1.0,
             cooldown_ms: 1500,
             zero_threshold_kg: 0.25,
+            stable_timeout_ms: 5000,
+            sample_interval_ms: 60,
         };
         let next = build_candidate_config(&base, &SerialCandidate { baud_rate: 4800, data_bits: 7, stop_bits: 1, parity: "even".to_string() }, Some("ENQ"), "toledo:ti200:p05:2");
         assert_eq!(next.baud_rate, 4800);
