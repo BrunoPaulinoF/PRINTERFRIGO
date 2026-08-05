@@ -285,23 +285,42 @@ falar com o KyberFrigo entre uma leitura e outra.
 
 ### Criterio De Estabilidade
 
-Ha dois criterios, no campo `stabilityMode`:
+**Cada balanca responde de um jeito, e nem todo protocolo sabe avisar que a
+peca ainda se move.** O campo `stabilityMode` tem tres valores:
 
-- **`indicator` (padrao, recomendado)** — confia no aviso da propria balanca.
-  Um indicador Toledo TI200/Prix responde `III,III` enquanto a peca se move e so
-  devolve numero quando trava o peso. Entao toda leitura numerica ja e o
-  indicador declarando peso parado, e bastam `stableWindow` leituras seguidas
-  (padrao `2`) que concordem entre si dentro da tolerancia. E o mais rapido e o
-  mais correto: quem decide e o mesmo circuito que a metrologia legal aprovou.
-- **`window`** — mede a variancia aqui, exigindo que todas as leituras dos
-  ultimos `stableMs` caibam na tolerancia. Use so quando a balanca transmite
-  peso ao vivo e nunca declara movimento.
+- **`auto` (padrao, recomendado)** — escolhe pelo protocolo configurado no
+  `parserRegex`. Balanca cujo protocolo declara movimento usa o criterio
+  `indicator`; as demais usam `window`. A regra vive em `parser_declares_motion`
+  (`src-tauri/src/hardware.rs`) — hoje vale para a familia `toledo:ti200`
+  (TI200/Prix/9091, Protocol G).
+- **`indicator`** — sempre confia no aviso da balanca. Um TI200 responde
+  `III,III` enquanto a peca se move e so devolve numero quando trava o peso.
+  Entao toda leitura numerica ja e o indicador declarando peso parado, e bastam
+  `stableWindow` leituras seguidas (padrao `2`) que concordem dentro da
+  tolerancia. E o mais rapido e o mais correto: quem decide e o mesmo circuito
+  que a metrologia legal aprovou.
+- **`window`** — sempre mede a variancia aqui, exigindo que todas as leituras
+  dos ultimos `stableMs` caibam na tolerancia.
 
-A concordancia entre as leituras e exigida nos dois modos. No modo `indicator`
+**Por que `auto` importa:** com um `parserRegex` generico como
+`([-+]?\d+[\.,]?\d*)\s*kg?`, QUALQUER frame vira numero — inclusive no meio do
+balanco. Ali "frame numerico" nao significa "peso parado", e confiar nisso
+capturaria peso errado. So force `indicator` numa balanca que voce sabe que
+declara movimento e cujo protocolo ainda nao esta na lista.
+
+**Ao adicionar um protocolo novo**, decida explicitamente se ele declara
+movimento e atualize `parser_declares_motion`. Ha teste que percorre todos os
+parsers publicados e cobra essa decisao, justamente para nenhum herdar um
+padrao por acidente.
+
+A concordancia entre as leituras e exigida nos dois criterios. No `indicator`
 ela e a rede de seguranca: se a balanca estiver num modo que transmite ao vivo
-sem declarar movimento, duas leituras seguidas dentro de 100 g ainda impedem
-capturar no meio do balanco. Confirmacoes separadas por muito tempo nao valem —
-entre elas a peca pode ter entrado e saido de movimento.
+sem declarar movimento, duas leituras seguidas dentro da tolerancia ainda
+impedem capturar no meio do balanco. Confirmacoes separadas por muito tempo nao
+valem — entre elas a peca pode ter entrado e saido de movimento.
+
+O botao **Ler peso** mostra qual criterio valeu de fato, util quando
+`stabilityMode` esta em `auto`.
 
 Parametros principais:
 
@@ -310,8 +329,8 @@ Parametros principais:
   apertar bem mais.
 - `stableWindow`: quantas leituras confirmam o peso (modo `indicator`, padrao
   `2`) ou o minimo de amostras na janela (modo `window`).
-- `stableMs`: **so no modo `window`** — por quanto tempo o peso precisa ficar
-  dentro da tolerancia. Ignorado no modo `indicator`.
+- `stableMs`: **so no criterio `window`** — por quanto tempo o peso precisa
+  ficar dentro da tolerancia. Ignorado no criterio `indicator`.
 - `stableTimeoutMs`: tempo maximo esperando assentar antes de desistir da
   leitura. Padrao `5000`.
 - `sampleIntervalMs`: espera maxima por cada resposta da balanca. Nao e pausa

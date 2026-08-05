@@ -33,18 +33,21 @@ pub struct ScaleConfig {
     pub sample_interval_ms: u64,
     /// Como decidir que o peso estabilizou.
     ///
-    /// - `indicator`: confia no sinal da propria balanca. O TI200 responde
+    /// - `auto` (padrao): escolhe pelo protocolo. Ver `parser_declares_motion`
+    ///   em `hardware.rs` — cada balanca responde de um jeito, e so alguns
+    ///   protocolos sabem avisar que a peca ainda se move.
+    /// - `indicator`: sempre confia no sinal da balanca. O TI200 responde
     ///   `III,III` enquanto a peca se move e so devolve numero quando trava o
     ///   peso, entao bastam N leituras numericas seguidas e coerentes entre si.
-    /// - `window`: mede a variancia aqui, exigindo que todas as leituras dos
-    ///   ultimos `stable_ms` caibam na tolerancia. Para balanca que transmite
-    ///   peso ao vivo e nunca declara movimento.
+    /// - `window`: sempre mede a variancia aqui, exigindo que todas as leituras
+    ///   dos ultimos `stable_ms` caibam na tolerancia. Para balanca que
+    ///   transmite peso ao vivo e nunca declara movimento.
     #[serde(default = "default_stability_mode")]
     pub stability_mode: String,
 }
 
 fn default_stability_mode() -> String {
-    "indicator".to_string()
+    "auto".to_string()
 }
 
 fn default_stable_timeout_ms() -> u64 {

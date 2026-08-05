@@ -17,7 +17,7 @@ export type ScaleConfig = {
   zeroThresholdKg: number;
   stableTimeoutMs: number;
   sampleIntervalMs: number;
-  stabilityMode: "indicator" | "window";
+  stabilityMode: "auto" | "indicator" | "window";
 };
 
 export type StableReading = {
