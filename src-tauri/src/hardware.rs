@@ -200,6 +200,43 @@ pub struct WeightSample {
     pub weight_kg: f64,
 }
 
+/// Confirma a estabilidade pelo sinal da PROPRIA balanca.
+///
+/// O TI200 responde `III,III` enquanto a peca se move e so devolve numero
+/// quando trava o peso — `parse_toledo_ti200_frame` transforma esse marcador em
+/// erro, e o laco de amostragem zera a janela quando ele aparece. Entao toda
+/// amostra numerica aqui ja e o indicador declarando peso parado, e basta
+/// confirmar `confirmations` leituras seguidas.
+///
+/// As leituras ainda precisam concordar entre si dentro da tolerancia: se a
+/// balanca estiver num modo que transmite peso ao vivo sem nunca declarar
+/// movimento, a concordancia e o que impede capturar no meio do balanco.
+///
+/// `max_span_ms` descarta confirmacoes velhas — duas leituras separadas por
+/// segundos nao confirmam uma a outra, mesmo que batam no valor.
+pub fn evaluate_indicator_stability(
+    samples: &[WeightSample],
+    now_ms: u64,
+    confirmations: usize,
+    max_span_ms: u64,
+    threshold_kg: f64,
+) -> Option<f64> {
+    let needed = confirmations.max(2);
+    if samples.len() < needed {
+        return None;
+    }
+    let recent = &samples[samples.len() - needed..];
+    let oldest = recent.first()?;
+    if now_ms.saturating_sub(oldest.at_ms) > max_span_ms {
+        return None;
+    }
+    let values: Vec<f64> = recent.iter().map(|sample| sample.weight_kg).collect();
+    if !is_stable(&values, threshold_kg) {
+        return None;
+    }
+    values.last().copied()
+}
+
 /// Decide se a balanca estabilizou olhando SO para a janela de tempo mais
 /// recente (`stable_ms`), e nao para as N ultimas amostras.
 ///
@@ -851,6 +888,10 @@ pub fn read_scale_stable(config: ScaleConfig) -> Result<StableReading, String> {
     let stable_ms = config.stable_ms.max(1);
     let timeout_ms = config.stable_timeout_ms.max(stable_ms + 500);
     let response_wait = response_wait_for(&config);
+    let trusts_indicator = !config.stability_mode.eq_ignore_ascii_case("window");
+    // Confirmacoes precisam ser consecutivas de verdade. Tres prazos de resposta
+    // e folga para o ritmo normal do indicador e ainda descarta leitura velha.
+    let confirmation_span_ms = (response_wait.as_millis() as u64).saturating_mul(3).max(600);
 
     if config.mode.as_deref() == Some("simulated") {
         let weight = config.simulated_weight_kg.unwrap_or(12.345);
@@ -883,22 +924,39 @@ pub fn read_scale_stable(config: ScaleConfig) -> Result<StableReading, String> {
                     at_ms: elapsed_ms,
                     weight_kg: weight,
                 });
-                // Guarda so o necessario para cobrir a janela de estabilidade.
-                let cutoff = elapsed_ms.saturating_sub(stable_ms * 2);
+                // Guarda so o necessario para cobrir o criterio em uso, com
+                // folga. Cortar curto demais apagaria confirmacoes validas.
+                let keep_ms = (stable_ms * 2).max(confirmation_span_ms * 2);
+                let cutoff = elapsed_ms.saturating_sub(keep_ms);
                 samples.retain(|sample| sample.at_ms >= cutoff);
-                if let Some(stable_weight) = evaluate_stability(
-                    &samples,
-                    elapsed_ms,
-                    stable_ms,
-                    config.stable_window,
-                    config.stable_threshold_kg,
-                ) {
+                let settled = if trusts_indicator {
+                    evaluate_indicator_stability(
+                        &samples,
+                        elapsed_ms,
+                        config.stable_window,
+                        confirmation_span_ms,
+                        config.stable_threshold_kg,
+                    )
+                } else {
+                    evaluate_stability(
+                        &samples,
+                        elapsed_ms,
+                        stable_ms,
+                        config.stable_window,
+                        config.stable_threshold_kg,
+                    )
+                };
+                if let Some(stable_weight) = settled {
                     return Ok(StableReading {
                         weight_kg: stable_weight,
                         stable: true,
                         samples: samples.len(),
                         elapsed_ms: started.elapsed().as_millis() as u64,
-                        reason: "estavel".to_string(),
+                        reason: if trusts_indicator {
+                            "balanca declarou peso parado".to_string()
+                        } else {
+                            "estavel".to_string()
+                        },
                     });
                 }
             }
@@ -1476,6 +1534,7 @@ mod tests {
             zero_threshold_kg: 0.25,
             stable_timeout_ms: 6000,
             sample_interval_ms,
+            stability_mode: "indicator".to_string(),
         }
     }
 
@@ -1496,6 +1555,45 @@ mod tests {
             response_wait_for(&scale_with_sample_interval(99_999)),
             Duration::from_millis(MAX_RESPONSE_WAIT_MS),
         );
+    }
+
+    #[test]
+    fn indicator_mode_settles_on_two_agreeing_readings() {
+        // Toda amostra numerica ja e o TI200 declarando peso parado, entao duas
+        // leituras seguidas e coerentes bastam — sem esperar janela de tempo.
+        let samples = sampled(&[(0, 42.5), (200, 42.5)]);
+        let weight = evaluate_indicator_stability(&samples, 200, 2, 1200, 0.1).expect("deveria confirmar");
+        assert!((weight - 42.5).abs() < 0.0001);
+    }
+
+    #[test]
+    fn indicator_mode_needs_the_readings_to_agree() {
+        // Protege a balanca que transmite peso ao vivo sem declarar movimento:
+        // ali duas leituras numericas podem cair no meio do balanco.
+        let samples = sampled(&[(0, 42.5), (200, 43.4)]);
+        assert!(evaluate_indicator_stability(&samples, 200, 2, 1200, 0.1).is_none());
+    }
+
+    #[test]
+    fn indicator_mode_ignores_a_stale_confirmation() {
+        // Duas leituras separadas por segundos nao confirmam uma a outra: no
+        // meio delas a peca pode ter entrado e saido de movimento.
+        let samples = sampled(&[(0, 42.5), (5000, 42.5)]);
+        assert!(evaluate_indicator_stability(&samples, 5000, 2, 1200, 0.1).is_none());
+    }
+
+    #[test]
+    fn indicator_mode_honours_a_higher_confirmation_count() {
+        let samples = sampled(&[(0, 42.5), (200, 42.5)]);
+        assert!(evaluate_indicator_stability(&samples, 200, 3, 1200, 0.1).is_none());
+        let more = sampled(&[(0, 42.5), (200, 42.5), (400, 42.5)]);
+        assert!(evaluate_indicator_stability(&more, 400, 3, 1200, 0.1).is_some());
+    }
+
+    #[test]
+    fn indicator_mode_never_confirms_on_a_single_reading() {
+        let samples = sampled(&[(0, 42.5)]);
+        assert!(evaluate_indicator_stability(&samples, 0, 1, 1200, 0.1).is_none());
     }
 
     #[test]
@@ -1527,6 +1625,7 @@ mod tests {
             zero_threshold_kg: 0.25,
             stable_timeout_ms: 5000,
             sample_interval_ms: 60,
+            stability_mode: "indicator".to_string(),
         };
         let weight = read_scale_once(config).unwrap();
         assert!((weight - 12.345).abs() < 0.0001);
@@ -1643,6 +1742,7 @@ mod tests {
             zero_threshold_kg: 0.25,
             stable_timeout_ms: 5000,
             sample_interval_ms: 60,
+            stability_mode: "indicator".to_string(),
         };
         let next = build_candidate_config(&base, &SerialCandidate { baud_rate: 4800, data_bits: 7, stop_bits: 1, parity: "even".to_string() }, Some("ENQ"), "toledo:ti200:p05:2");
         assert_eq!(next.baud_rate, 4800);

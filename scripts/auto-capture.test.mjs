@@ -114,7 +114,11 @@ test("station fields include short operator help tooltips", async () => {
   assert.ok(source.includes("function FieldLabel"), "UI must use a shared label helper for field help");
   assert.ok(source.includes('className="help-tip"'), "field help must render visible question-mark tips");
   assert.ok(source.includes('Peso minimo kg</FieldLabel>'), "minimum weight field must explain capture threshold");
-  assert.ok(source.includes('Amostras minimas</FieldLabel>'), "minimum sample field must have operator help");
+  assert.ok(
+    /help=\{scale\.stabilityMode === "window"[\s\S]{0,320}"Amostras minimas" : "Confirmacoes"\}<\/FieldLabel>/.test(source),
+    "the confirmation/sample field must have operator help and name itself after the criterion in use",
+  );
+  assert.ok(source.includes('Criterio de estabilidade</FieldLabel>'), "the stability criterion selector must have operator help");
   assert.ok(source.includes('Tolerancia kg</FieldLabel>'), "stability tolerance field must have operator help");
   assert.ok(source.includes('Estabilidade ms</FieldLabel>'), "stability period field must have operator help");
   assert.ok(source.includes('Tempo limite ms</FieldLabel>'), "stabilisation timeout field must have operator help");
@@ -239,5 +243,50 @@ test("a lost frame does not wipe the stability window", async () => {
   assert.ok(
     /if err\.contains\("instavel"\)[\s\S]*?\{\s*\n\s*samples\.clear\(\);/.test(errorArm[0]),
     "only an indicator-declared instability may clear the window",
+  );
+});
+
+test("stability can come from the indicator itself, confirmed by a couple of readings", async () => {
+  const appSource = await readFile(appPath, "utf8");
+  const hardwarePath = new URL("../src-tauri/src/hardware.rs", import.meta.url);
+  const hardwareSource = await readFile(hardwarePath, "utf8");
+
+  // O TI200 responde III,III enquanto a peca se move e so devolve numero
+  // quando trava o peso. Medir variancia por 1,2s aqui repete um trabalho que
+  // o indicador ja fez, e cobra esse tempo em cada carcaca.
+  assert.ok(hardwareSource.includes("evaluate_indicator_stability"), "there must be an indicator-driven criterion");
+  assert.ok(
+    /let trusts_indicator = !config\.stability_mode\.eq_ignore_ascii_case\("window"\);/.test(hardwareSource),
+    "indicator mode must be the default, with window mode as the opt-out",
+  );
+  assert.ok(
+    /if now_ms\.saturating_sub\(oldest\.at_ms\) > max_span_ms/.test(hardwareSource),
+    "stale readings must not confirm each other",
+  );
+  assert.ok(
+    /let needed = confirmations\.max\(2\);/.test(hardwareSource),
+    "a single reading must never be enough, whatever the config says",
+  );
+  assert.ok(appSource.includes('stabilityMode: "indicator"'), "the app default must trust the indicator");
+});
+
+test("a forced capture is refused when the scale never confirmed the weight", async () => {
+  const source = await readFile(appPath, "utf8");
+
+  // Peso nao confirmado virando volume e peso errado em nota fiscal. Repetir o
+  // clique custa segundos; corrigir o volume depois custa muito mais.
+  const manualBlock = source.match(/const reading = await readScaleStable\(scale\);[\s\S]*?await submitCapture\(session, weight, commandId, reading\.stable\);/);
+  assert.ok(manualBlock, "the forced-capture path must be readable as a block");
+  const refusalIndex = manualBlock[0].search(/if \(!reading\.stable\) \{/);
+  const submitIndex = manualBlock[0].search(/await submitCapture/);
+  assert.ok(refusalIndex >= 0, "the forced-capture path must check the stable flag");
+  assert.ok(refusalIndex < submitIndex, "the refusal must come before the submit");
+  assert.ok(
+    /throw new Error\(\s*`Balanca ainda em movimento/.test(manualBlock[0]),
+    "the operator must be told why nothing was captured",
+  );
+  assert.ok(
+    /handledCommands\.current\.add\(commandId\);[\s\S]{0,600}throw new Error\(\s*`Balanca ainda em movimento/.test(manualBlock[0]),
+    "the refused command must be marked handled so it does not capture on its own once the piece settles",
   );
 });
