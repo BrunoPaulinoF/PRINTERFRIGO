@@ -26,8 +26,9 @@ pub struct ScaleConfig {
     /// antes de desistir e devolver a ultima leitura como instavel.
     #[serde(default = "default_stable_timeout_ms")]
     pub stable_timeout_ms: u64,
-    /// Espera maxima, em ms, por uma resposta da balanca a cada amostra.
-    /// Nao e um sleep fixo: a leitura retorna assim que o frame chega.
+    /// Prazo, em ms, que a balanca tem para responder a cada amostra. Nao e um
+    /// sleep fixo: a leitura retorna assim que o frame chega. Valores muito
+    /// baixos fazem toda amostra estourar o prazo — ha um piso em `hardware.rs`.
     #[serde(default = "default_sample_interval_ms")]
     pub sample_interval_ms: u64,
 }
@@ -37,7 +38,7 @@ fn default_stable_timeout_ms() -> u64 {
 }
 
 fn default_sample_interval_ms() -> u64 {
-    60
+    400
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

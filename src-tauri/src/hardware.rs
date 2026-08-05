@@ -777,6 +777,27 @@ fn open_scale_link(config: &ScaleConfig, read_timeout: Duration) -> Result<Scale
     Ok(ScaleLink::Serial(port))
 }
 
+/// Granularidade da leitura na porta. NAO e o tempo que a balanca tem para
+/// responder — e so de quanto em quanto tempo o laco volta a checar se chegou
+/// byte. O prazo de resposta e `response_wait` em `sample_scale`.
+const SERIAL_POLL_MS: u64 = 40;
+
+/// Prazo minimo de resposta, em ms. Um indicador serial nao responde a um ENQ
+/// em dezenas de milissegundos: o caminho antigo (`read_scale_once`) dava a ele
+/// 250ms de sleep mais 1500ms de timeout. Configurar abaixo disso faz toda
+/// amostra estourar o prazo e a balanca nunca estabilizar, entao o piso e
+/// aplicado aqui tambem — nao so na tela.
+const MIN_RESPONSE_WAIT_MS: u64 = 250;
+const MAX_RESPONSE_WAIT_MS: u64 = 2000;
+
+fn response_wait_for(config: &ScaleConfig) -> Duration {
+    Duration::from_millis(
+        config
+            .sample_interval_ms
+            .clamp(MIN_RESPONSE_WAIT_MS, MAX_RESPONSE_WAIT_MS),
+    )
+}
+
 /// Pede e le UMA amostra no canal ja aberto. Nao usa sleep fixo: retorna assim
 /// que um frame com peso chega, ou quando `wait` estoura.
 fn sample_scale(link: &mut ScaleLink, config: &ScaleConfig, wait: Duration) -> Result<f64, String> {
@@ -829,7 +850,7 @@ fn sample_scale(link: &mut ScaleLink, config: &ScaleConfig, wait: Duration) -> R
 pub fn read_scale_stable(config: ScaleConfig) -> Result<StableReading, String> {
     let stable_ms = config.stable_ms.max(1);
     let timeout_ms = config.stable_timeout_ms.max(stable_ms + 500);
-    let sample_wait = Duration::from_millis(config.sample_interval_ms.clamp(20, 1000));
+    let response_wait = response_wait_for(&config);
 
     if config.mode.as_deref() == Some("simulated") {
         let weight = config.simulated_weight_kg.unwrap_or(12.345);
@@ -845,7 +866,9 @@ pub fn read_scale_stable(config: ScaleConfig) -> Result<StableReading, String> {
         });
     }
 
-    let mut link = open_scale_link(&config, sample_wait)?;
+    // A porta e lida em passos curtos so para o laco nao ficar bloqueado; quem
+    // define quanto tempo a balanca tem para responder e `response_wait`.
+    let mut link = open_scale_link(&config, Duration::from_millis(SERIAL_POLL_MS))?;
     let started = Instant::now();
     let mut samples: Vec<WeightSample> = Vec::new();
     let mut last_weight: Option<f64> = None;
@@ -853,7 +876,7 @@ pub fn read_scale_stable(config: ScaleConfig) -> Result<StableReading, String> {
 
     loop {
         let elapsed_ms = started.elapsed().as_millis() as u64;
-        match sample_scale(&mut link, &config, sample_wait) {
+        match sample_scale(&mut link, &config, response_wait) {
             Ok(weight) => {
                 last_weight = Some(weight);
                 samples.push(WeightSample {
@@ -880,10 +903,15 @@ pub fn read_scale_stable(config: ScaleConfig) -> Result<StableReading, String> {
                 }
             }
             Err(err) => {
-                // Frame instavel ou perdido nao aborta a leitura: e justamente o
-                // sinal de que a peca ainda esta balancando. Zera a janela para
-                // nao costurar amostras de antes e depois do movimento.
-                samples.clear();
+                // So o indicador AFIRMANDO instabilidade zera a janela. Um frame
+                // perdido ou um prazo estourado e ruido de transporte: zerar a
+                // janela nele fazia uma balanca um pouco mais lenta nunca
+                // estabilizar, porque cada amostra atrasada apagava as boas.
+                // Amostra velha sai sozinha da janela em `evaluate_stability`,
+                // que e por tempo, entao pular e seguro.
+                if err.contains("instavel") || err.contains("sobrecarga") || err.contains("negativo") {
+                    samples.clear();
+                }
                 last_error = Some(err);
             }
         }
@@ -1426,6 +1454,56 @@ mod tests {
     fn stability_requires_the_minimum_sample_count() {
         let samples = sampled(&[(0, 42.5), (900, 42.5)]);
         assert!(evaluate_stability(&samples, 900, 800, 4, 0.1).is_none());
+    }
+
+    fn scale_with_sample_interval(sample_interval_ms: u64) -> ScaleConfig {
+        ScaleConfig {
+            mode: Some("serial".to_string()),
+            port: "COM3".to_string(),
+            host: None,
+            simulated_weight_kg: None,
+            baud_rate: 9600,
+            data_bits: 8,
+            stop_bits: 1,
+            parity: "none".to_string(),
+            read_command: Some("ENQ".to_string()),
+            parser_regex: "toledo:ti200".to_string(),
+            stable_window: 3,
+            stable_threshold_kg: 0.1,
+            stable_ms: 1200,
+            min_weight_kg: 8.0,
+            cooldown_ms: 1000,
+            zero_threshold_kg: 0.25,
+            stable_timeout_ms: 6000,
+            sample_interval_ms,
+        }
+    }
+
+    #[test]
+    fn response_wait_never_drops_below_what_a_serial_indicator_needs() {
+        // A v0.5.6 saiu com 60ms e o ponto 1 gravou esse valor. Com 60ms toda
+        // amostra estourava o prazo antes de o TI200 responder ao ENQ, entao a
+        // balanca nunca estabilizava e toda captura ia embora como instavel.
+        assert_eq!(
+            response_wait_for(&scale_with_sample_interval(60)),
+            Duration::from_millis(MIN_RESPONSE_WAIT_MS),
+        );
+        assert_eq!(
+            response_wait_for(&scale_with_sample_interval(400)),
+            Duration::from_millis(400),
+        );
+        assert_eq!(
+            response_wait_for(&scale_with_sample_interval(99_999)),
+            Duration::from_millis(MAX_RESPONSE_WAIT_MS),
+        );
+    }
+
+    #[test]
+    fn serial_poll_step_is_shorter_than_the_response_deadline() {
+        // O passo de leitura na porta so define a granularidade do laco; se
+        // ficasse igual ao prazo de resposta, cada amostra teria uma unica
+        // tentativa e um frame parcial derrubaria a leitura inteira.
+        assert!(SERIAL_POLL_MS < MIN_RESPONSE_WAIT_MS);
     }
 
     #[test]

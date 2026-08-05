@@ -194,3 +194,50 @@ test("the topbar version button drives the manual update flow", async () => {
   assert.ok(source.includes("Atualizar para "), "the update action must name the target version");
   assert.ok(source.includes("dismissUpdateCheck"), "the operator must be able to dismiss the prompt without updating");
 });
+
+test("the scale response deadline cannot be set below what a serial indicator needs", async () => {
+  const appSource = await readFile(appPath, "utf8");
+  const hardwarePath = new URL("../src-tauri/src/hardware.rs", import.meta.url);
+  const hardwareSource = await readFile(hardwarePath, "utf8");
+
+  // A v0.5.6 saiu com 60ms de prazo de resposta. O TI200 nao responde a um ENQ
+  // nesse tempo — o caminho antigo lhe dava 250ms de sleep mais 1500ms de
+  // timeout. Resultado: toda amostra estourava, a janela nunca acumulava, e as
+  // 221 capturas do recebimento foram gravadas com stable=false.
+  assert.ok(hardwareSource.includes("MIN_RESPONSE_WAIT_MS"), "Rust must floor the response deadline");
+  assert.ok(
+    /const MIN_RESPONSE_WAIT_MS: u64 = (2[5-9][0-9]|[3-9][0-9]{2}|[0-9]{4,});/.test(hardwareSource),
+    "the response deadline floor must be at least 250 ms",
+  );
+  assert.ok(
+    /const SERIAL_POLL_MS: u64 = \d+;/.test(hardwareSource),
+    "the port poll step must be its own constant, separate from the response deadline",
+  );
+
+  // Configuracao ja salva na estacao precisa ser corrigida ao carregar, senao
+  // atualizar o app nao resolve nada.
+  assert.ok(appSource.includes("repairSampleInterval"), "saved configs must be repaired on load");
+  assert.ok(
+    /const MIN_SAMPLE_INTERVAL_MS = (2[5-9][0-9]|[3-9][0-9]{2}|[0-9]{4,});/.test(appSource),
+    "the frontend floor must match the Rust one",
+  );
+  assert.ok(
+    /repairSampleInterval\(\{ \.\.\.defaultConfig\.scale, \.\.\.scale \}\)/.test(appSource),
+    "every scale in the list must be repaired, not just the primary one",
+  );
+  assert.equal(appSource.includes("sampleIntervalMs: 60"), false, "the broken default must be gone");
+});
+
+test("a lost frame does not wipe the stability window", async () => {
+  const hardwarePath = new URL("../src-tauri/src/hardware.rs", import.meta.url);
+  const hardwareSource = await readFile(hardwarePath, "utf8");
+
+  // Zerar a janela a cada falha de transporte fazia uma balanca so um pouco
+  // mais lenta nunca estabilizar: cada amostra atrasada apagava as boas.
+  const errorArm = hardwareSource.match(/Err\(err\) => \{[\s\S]*?samples\.clear\(\);[\s\S]*?last_error = Some\(err\);/);
+  assert.ok(errorArm, "the sampling loop must still handle read errors");
+  assert.ok(
+    /if err\.contains\("instavel"\)[\s\S]*?\{\s*\n\s*samples\.clear\(\);/.test(errorArm[0]),
+    "only an indicator-declared instability may clear the window",
+  );
+});

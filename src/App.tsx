@@ -161,7 +161,7 @@ const defaultConfig: StationConfig = {
     cooldownMs: 1500,
     zeroThresholdKg: 0.25,
     stableTimeoutMs: 5000,
-    sampleIntervalMs: 60,
+    sampleIntervalMs: 400,
   },
   printer: {
     mode: "windows_spooler",
@@ -175,8 +175,20 @@ function isLocalServerUrl(url: string) {
   return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/?$/i.test(url.trim());
 }
 
+/// Prazo minimo de resposta da balanca. Espelha `MIN_RESPONSE_WAIT_MS` no
+/// Rust. A v0.5.6 saiu com padrao de 60ms, curto demais para um indicador
+/// serial responder a um ENQ: toda amostra estourava o prazo e a balanca nunca
+/// estabilizava. Configuracoes salvas com o valor antigo sao corrigidas aqui,
+/// senao a estacao continuaria quebrada mesmo depois de atualizar.
+const MIN_SAMPLE_INTERVAL_MS = 250;
+
+function repairSampleInterval(scale: ScaleConfig): ScaleConfig {
+  if (scale.sampleIntervalMs >= MIN_SAMPLE_INTERVAL_MS) return scale;
+  return { ...scale, sampleIntervalMs: defaultConfig.scale.sampleIntervalMs };
+}
+
 function normalizeConfig(config: StationConfig): StationConfig {
-  const scale = { ...defaultConfig.scale, ...config.scale };
+  const scale = repairSampleInterval({ ...defaultConfig.scale, ...config.scale });
   const printer = { ...defaultConfig.printer, ...config.printer };
   const scales = normalizeScales(config.scales, scale);
   const printers = normalizePrinters(config.printers, printer);
@@ -196,7 +208,7 @@ function normalizeConfig(config: StationConfig): StationConfig {
 
 function normalizeScales(scales: ScaleConfig[] | undefined, fallback: ScaleConfig) {
   const items = (scales && scales.length > 0 ? scales : [fallback])
-    .map((scale) => ({ ...defaultConfig.scale, ...scale }))
+    .map((scale) => repairSampleInterval({ ...defaultConfig.scale, ...scale }))
     .filter((scale, index, all) => scale.port || scale.mode === "simulated" || scale.mode === "tcp" || index === 0 && all.length === 1);
   if (!items.some((scale) => scale.port === fallback.port && scale.host === fallback.host)) items.unshift(fallback);
   return dedupeBy(items, (scale) => {
@@ -497,6 +509,18 @@ export function App() {
         setLastWeight(null);
         setStatus(errorMessage(parseError, "Frame recebido, mas o parser ainda nao reconheceu o peso."));
       }
+      // Mede a estabilizacao de verdade, com os parametros configurados. Sem
+      // isso, "Ler peso" dizia que a balanca respondia enquanto a captura
+      // continuava estourando o tempo limite.
+      try {
+        const reading = await readScaleStable(config.scale);
+        setLastWeight(reading.weightKg);
+        setStatus(reading.stable
+          ? `Estabilizou em ${reading.elapsedMs} ms com ${reading.samples} amostras: ${reading.weightKg.toFixed(3)} kg.`
+          : `NAO estabilizou em ${reading.elapsedMs} ms (${reading.samples} amostras). Ultima leitura ${reading.weightKg.toFixed(3)} kg. Motivo: ${reading.reason}`);
+      } catch (stableError) {
+        setStatus(errorMessage(stableError, "A balanca respondeu ao teste, mas falhou na leitura com estabilizacao."));
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Erro ao ler balanca.";
       setRawFrame(message);
@@ -743,6 +767,18 @@ export function App() {
         const reading = await readScaleStable(scale);
         const weight = reading.weightKg;
         setLastWeight(weight);
+        if (!reading.stable) {
+          // Captura forcada que nao estabilizou vai assim mesmo (o operador
+          // pediu), mas precisa deixar rastro: foi so por esse sinal que deu
+          // para descobrir que a balanca nao estava respondendo a tempo.
+          recordLocalLog("warn", "Captura forcada sem estabilizar.", {
+            sessionId: session.id,
+            weight,
+            samples: reading.samples,
+            elapsedMs: reading.elapsedMs,
+            reason: reading.reason,
+          });
+        }
         if (weight < scale.minWeightKg) {
           handledCommands.current.add(commandId);
           throw new Error(`Peso ${weight.toFixed(3)} kg abaixo do minimo ${scale.minWeightKg.toFixed(3)} kg.`);
@@ -1357,7 +1393,7 @@ export function App() {
                 <div><FieldLabel help="Tempo maximo esperando a peca assentar antes de desistir da leitura.">Tempo limite ms</FieldLabel><input type="number" min="500" step="500" value={scale.stableTimeoutMs} onChange={(e) => updateScaleAt(index, { stableTimeoutMs: Number(e.target.value) })} /></div>
               </div>
               <div className="split">
-                <div><FieldLabel help="Espera maxima por cada resposta da balanca. Nao e pausa fixa: a leitura segue assim que o peso chega.">Intervalo amostra ms</FieldLabel><input type="number" min="20" max="1000" step="10" value={scale.sampleIntervalMs} onChange={(e) => updateScaleAt(index, { sampleIntervalMs: Number(e.target.value) })} /></div>
+                <div><FieldLabel help="Prazo que a balanca tem para responder cada amostra. Nao e pausa fixa: a leitura segue assim que o peso chega. Abaixo de 250 nao funciona — indicador serial nao responde tao rapido.">Espera resposta ms</FieldLabel><input type="number" min="250" max="2000" step="50" value={scale.sampleIntervalMs} onChange={(e) => updateScaleAt(index, { sampleIntervalMs: Number(e.target.value) })} /></div>
                 <div><FieldLabel help="Espera minima entre duas capturas automaticas, em milissegundos.">Cooldown ms</FieldLabel><input type="number" min="0" value={scale.cooldownMs} onChange={(e) => updateScaleAt(index, { cooldownMs: Number(e.target.value) })} /></div>
               </div>
               <div className="split">
