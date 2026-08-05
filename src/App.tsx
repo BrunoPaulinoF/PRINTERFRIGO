@@ -162,7 +162,7 @@ const defaultConfig: StationConfig = {
     zeroThresholdKg: 0.25,
     stableTimeoutMs: 5000,
     sampleIntervalMs: 400,
-    stabilityMode: "indicator",
+    stabilityMode: "auto",
   },
   printer: {
     mode: "windows_spooler",
@@ -1391,17 +1391,18 @@ export function App() {
                 <div><FieldLabel help="Velocidade da comunicacao serial; precisa bater com a balanca.">Baud</FieldLabel><input type="number" value={scale.baudRate} onChange={(e) => updateScaleAt(index, { baudRate: Number(e.target.value) })} /></div>
                 <div><FieldLabel help="Peso minimo bruto para aceitar captura automatica ou manual.">Peso minimo kg</FieldLabel><input type="number" value={scale.minWeightKg} onChange={(e) => updateScaleAt(index, { minWeightKg: Number(e.target.value) })} /></div>
               </div>
-              <FieldLabel help="Como decidir que o peso parou. A maioria dos indicadores (Toledo TI200/Prix) avisa quando a peca ainda se move — confiar nesse aviso e o mais rapido e o mais correto. Use 'medir aqui' so se a balanca transmite peso ao vivo e nunca declara movimento.">Criterio de estabilidade</FieldLabel>
+              <FieldLabel help="Cada balanca responde de um jeito. No automatico o app confia no aviso da balanca quando o protocolo sabe avisar movimento (Toledo TI200/Prix) e mede aqui quando nao sabe (parser generico). So force um dos dois se esta balanca fugir da regra. O botao Ler peso mostra qual criterio valeu.">Criterio de estabilidade</FieldLabel>
               <select value={scale.stabilityMode} onChange={(e) => updateScaleAt(index, { stabilityMode: e.target.value as ScaleConfig["stabilityMode"] })}>
-                <option value="indicator">Confiar no aviso da balanca (recomendado)</option>
-                <option value="window">Medir aqui por janela de tempo</option>
+                <option value="auto">Automatico pelo protocolo (recomendado)</option>
+                <option value="indicator">Sempre confiar no aviso da balanca</option>
+                <option value="window">Sempre medir aqui por janela de tempo</option>
               </select>
               <div className="split">
-                <div><FieldLabel help={scale.stabilityMode === "window" ? "Minimo de leituras dentro da janela de tempo para aceitar o peso." : "Quantas leituras seguidas da balanca confirmam o peso. 2 e o suficiente quando a balanca declara peso parado."}>{scale.stabilityMode === "window" ? "Amostras minimas" : "Confirmacoes"}</FieldLabel><input type="number" min="2" value={scale.stableWindow} onChange={(e) => updateScaleAt(index, { stableWindow: Number(e.target.value) })} /></div>
+                <div><FieldLabel help={scale.stabilityMode === "window" ? "Minimo de leituras dentro da janela de tempo para aceitar o peso." : "Quantas leituras confirmam o peso. Quando o app confia no aviso da balanca, 2 basta; quando ele mede aqui, e o minimo de amostras na janela."}>{scale.stabilityMode === "window" ? "Amostras minimas" : "Confirmacoes / amostras"}</FieldLabel><input type="number" min="2" value={scale.stableWindow} onChange={(e) => updateScaleAt(index, { stableWindow: Number(e.target.value) })} /></div>
                 <div><FieldLabel help="Variacao maxima, em kg, permitida na janela de estabilidade. 0,1 = aceita 100 g de oscilacao (recomendado para carcacas no trilho).">Tolerancia kg</FieldLabel><input type="number" step="0.001" value={scale.stableThresholdKg} onChange={(e) => updateScaleAt(index, { stableThresholdKg: Number(e.target.value) })} /></div>
               </div>
               <div className="split">
-                <div><FieldLabel help="So vale no criterio 'medir aqui': por quanto tempo o peso precisa ficar dentro da tolerancia. Ignorado quando se confia no aviso da balanca.">Estabilidade ms</FieldLabel><input type="number" min="100" step="100" value={scale.stableMs} disabled={scale.stabilityMode !== "window"} onChange={(e) => updateScaleAt(index, { stableMs: Number(e.target.value) })} /></div>
+                <div><FieldLabel help="So vale no criterio 'medir aqui': por quanto tempo o peso precisa ficar dentro da tolerancia. Ignorado quando se confia no aviso da balanca.">Estabilidade ms</FieldLabel><input type="number" min="100" step="100" value={scale.stableMs} disabled={scale.stabilityMode === "indicator"} onChange={(e) => updateScaleAt(index, { stableMs: Number(e.target.value) })} /></div>
                 <div><FieldLabel help="Tempo maximo esperando a peca assentar antes de desistir da leitura.">Tempo limite ms</FieldLabel><input type="number" min="500" step="500" value={scale.stableTimeoutMs} onChange={(e) => updateScaleAt(index, { stableTimeoutMs: Number(e.target.value) })} /></div>
               </div>
               <div className="split">

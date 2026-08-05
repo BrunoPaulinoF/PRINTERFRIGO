@@ -115,7 +115,7 @@ test("station fields include short operator help tooltips", async () => {
   assert.ok(source.includes('className="help-tip"'), "field help must render visible question-mark tips");
   assert.ok(source.includes('Peso minimo kg</FieldLabel>'), "minimum weight field must explain capture threshold");
   assert.ok(
-    /help=\{scale\.stabilityMode === "window"[\s\S]{0,320}"Amostras minimas" : "Confirmacoes"\}<\/FieldLabel>/.test(source),
+    /help=\{scale\.stabilityMode === "window"[\s\S]{0,400}"Amostras minimas" : "Confirmacoes \/ amostras"\}<\/FieldLabel>/.test(source),
     "the confirmation/sample field must have operator help and name itself after the criterion in use",
   );
   assert.ok(source.includes('Criterio de estabilidade</FieldLabel>'), "the stability criterion selector must have operator help");
@@ -256,8 +256,8 @@ test("stability can come from the indicator itself, confirmed by a couple of rea
   // o indicador ja fez, e cobra esse tempo em cada carcaca.
   assert.ok(hardwareSource.includes("evaluate_indicator_stability"), "there must be an indicator-driven criterion");
   assert.ok(
-    /let trusts_indicator = !config\.stability_mode\.eq_ignore_ascii_case\("window"\);/.test(hardwareSource),
-    "indicator mode must be the default, with window mode as the opt-out",
+    /let trusts_indicator = trusts_indicator_signal\(&config\);/.test(hardwareSource),
+    "the criterion must be resolved per scale, not hardcoded in the reading loop",
   );
   assert.ok(
     /if now_ms\.saturating_sub\(oldest\.at_ms\) > max_span_ms/.test(hardwareSource),
@@ -267,7 +267,37 @@ test("stability can come from the indicator itself, confirmed by a couple of rea
     /let needed = confirmations\.max\(2\);/.test(hardwareSource),
     "a single reading must never be enough, whatever the config says",
   );
-  assert.ok(appSource.includes('stabilityMode: "indicator"'), "the app default must trust the indicator");
+  assert.ok(appSource.includes('stabilityMode: "auto"'), "the app default must resolve the criterion per protocol");
+});
+
+test("only protocols that report motion are trusted to declare stability", async () => {
+  const appSource = await readFile(appPath, "utf8");
+  const hardwarePath = new URL("../src-tauri/src/hardware.rs", import.meta.url);
+  const hardwareSource = await readFile(hardwarePath, "utf8");
+
+  // Cada balanca responde de um jeito. Um regex generico casa QUALQUER frame,
+  // inclusive no meio do balanco: ali "frame numerico" nao significa "peso
+  // parado", e confiar nisso capturaria peso errado.
+  assert.ok(hardwareSource.includes("fn parser_declares_motion"), "there must be one place deciding this per protocol");
+  assert.ok(
+    /_ => parser_declares_motion\(&config\.parser_regex\),/.test(hardwareSource),
+    "the default must fall back to the protocol check, not to blanket trust",
+  );
+
+  // Config antiga (sem o campo) e qualquer valor desconhecido caem no caminho
+  // seguro, e nao em "confia sempre".
+  const resolver = hardwareSource.match(/pub fn trusts_indicator_signal[\s\S]*?\n\}/);
+  assert.ok(resolver, "the resolver must be readable as a block");
+  assert.ok(/"indicator" => true/.test(resolver[0]), "explicit indicator mode must stay available");
+  assert.ok(/"window" => false/.test(resolver[0]), "explicit window mode must stay available");
+  assert.equal(
+    /_ => true/.test(resolver[0]),
+    false,
+    "an unknown or empty mode must never mean blanket trust",
+  );
+
+  assert.ok(appSource.includes('value="auto"'), "the operator must be able to pick the automatic criterion");
+  assert.ok(appSource.includes('value="window"'), "the operator must be able to force the measured criterion");
 });
 
 test("a forced capture is refused when the scale never confirmed the weight", async () => {

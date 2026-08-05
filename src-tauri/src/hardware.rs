@@ -200,6 +200,33 @@ pub struct WeightSample {
     pub weight_kg: f64,
 }
 
+/// Diz se o parser em uso consegue ouvir a balanca DECLARANDO movimento.
+///
+/// So vale para protocolo que tem um marcador proprio de instabilidade — o
+/// `parse_toledo_ti200_frame` reconhece `III,III` (movimento), `SSSSS`
+/// (sobrecarga), `CCCCC` (capturando zero) e `NNNNN` (negativo).
+///
+/// Para um regex generico como `([-+]?\d+[\.,]?\d*)\s*kg?` QUALQUER frame vira
+/// numero, inclusive no meio do balanco. Ali "frame numerico" nao significa
+/// "peso parado", e confiar nisso capturaria peso errado. Essa e a lista que
+/// precisa crescer quando entrar um protocolo novo com sinal de estabilidade.
+pub fn parser_declares_motion(parser_regex: &str) -> bool {
+    parser_regex.trim().to_ascii_lowercase().starts_with("toledo:ti200")
+}
+
+/// Resolve o criterio de estabilidade que vale para esta balanca.
+///
+/// `auto` (padrao) escolhe pelo protocolo: confia no indicador so quando ele
+/// sabe avisar movimento, e mede aqui quando nao sabe. `indicator` e `window`
+/// forcam um dos dois, para o caso de uma balanca fugir da regra.
+pub fn trusts_indicator_signal(config: &ScaleConfig) -> bool {
+    match config.stability_mode.trim().to_ascii_lowercase().as_str() {
+        "indicator" => true,
+        "window" => false,
+        _ => parser_declares_motion(&config.parser_regex),
+    }
+}
+
 /// Confirma a estabilidade pelo sinal da PROPRIA balanca.
 ///
 /// O TI200 responde `III,III` enquanto a peca se move e so devolve numero
@@ -888,7 +915,7 @@ pub fn read_scale_stable(config: ScaleConfig) -> Result<StableReading, String> {
     let stable_ms = config.stable_ms.max(1);
     let timeout_ms = config.stable_timeout_ms.max(stable_ms + 500);
     let response_wait = response_wait_for(&config);
-    let trusts_indicator = !config.stability_mode.eq_ignore_ascii_case("window");
+    let trusts_indicator = trusts_indicator_signal(&config);
     // Confirmacoes precisam ser consecutivas de verdade. Tres prazos de resposta
     // e folga para o ritmo normal do indicador e ainda descarta leitura velha.
     let confirmation_span_ms = (response_wait.as_millis() as u64).saturating_mul(3).max(600);
@@ -953,9 +980,12 @@ pub fn read_scale_stable(config: ScaleConfig) -> Result<StableReading, String> {
                         samples: samples.len(),
                         elapsed_ms: started.elapsed().as_millis() as u64,
                         reason: if trusts_indicator {
-                            "balanca declarou peso parado".to_string()
+                            format!(
+                                "balanca declarou peso parado, confirmado por {} leituras",
+                                config.stable_window.max(2)
+                            )
                         } else {
-                            "estavel".to_string()
+                            format!("peso dentro da tolerancia por {stable_ms} ms")
                         },
                     });
                 }
@@ -982,7 +1012,14 @@ pub fn read_scale_stable(config: ScaleConfig) -> Result<StableReading, String> {
                     stable: false,
                     samples: samples.len(),
                     elapsed_ms,
-                    reason: last_error.unwrap_or_else(|| "Peso nao estabilizou no tempo limite.".to_string()),
+                    // O criterio em uso entra no motivo: sem isso nao da para
+                    // saber, olhando o log, se a balanca nunca declarou peso
+                    // parado ou se foi a variancia medida aqui que reprovou.
+                    reason: format!(
+                        "{} (criterio: {})",
+                        last_error.unwrap_or_else(|| "Peso nao estabilizou no tempo limite.".to_string()),
+                        if trusts_indicator { "aviso da balanca" } else { "janela de tempo" },
+                    ),
                 }),
                 None => Err(last_error
                     .unwrap_or_else(|| "Balanca nao respondeu durante a leitura.".to_string())),
@@ -1555,6 +1592,70 @@ mod tests {
             response_wait_for(&scale_with_sample_interval(99_999)),
             Duration::from_millis(MAX_RESPONSE_WAIT_MS),
         );
+    }
+
+    #[test]
+    fn only_protocols_with_a_motion_flag_are_trusted() {
+        // Toledo tem marcador proprio de movimento (III,III), entao da para
+        // confiar. Regex generico casa QUALQUER frame, inclusive no meio do
+        // balanco — ali "numero" nao significa "peso parado".
+        assert!(parser_declares_motion("toledo:ti200"));
+        assert!(parser_declares_motion("toledo:ti200:p05:3"));
+        assert!(parser_declares_motion("toledo:ti200:status:1"));
+        assert!(parser_declares_motion("  TOLEDO:TI200  "));
+        assert!(!parser_declares_motion(r"([-+]?\d+[\.,]?\d*)\s*kg?"));
+        assert!(!parser_declares_motion(r"[-+]?\d{1,6}[\.,]\d{1,6}"));
+        assert!(!parser_declares_motion("(?P<weight>\\d+)"));
+    }
+
+    #[test]
+    fn every_shipped_parser_has_a_decided_criterion() {
+        // Se entrar parser novo, ele passa por aqui e alguem precisa decidir se
+        // o protocolo sabe avisar movimento — em vez de herdar um padrao.
+        for candidate in parser_candidates() {
+            let trusted = parser_declares_motion(&candidate.regex);
+            let expected = candidate.regex.starts_with("toledo:");
+            assert_eq!(
+                trusted, expected,
+                "parser {} ({}) precisa de decisao explicita sobre sinal de movimento",
+                candidate.label, candidate.regex
+            );
+        }
+    }
+
+    #[test]
+    fn auto_mode_picks_the_criterion_from_the_protocol() {
+        let mut toledo = scale_with_sample_interval(400);
+        toledo.stability_mode = "auto".to_string();
+        toledo.parser_regex = "toledo:ti200".to_string();
+        assert!(trusts_indicator_signal(&toledo));
+
+        let mut generic = scale_with_sample_interval(400);
+        generic.stability_mode = "auto".to_string();
+        generic.parser_regex = r"([-+]?\d+[\.,]?\d*)\s*kg?".to_string();
+        assert!(
+            !trusts_indicator_signal(&generic),
+            "balanca com parser generico nao pode ser tratada como se declarasse movimento",
+        );
+
+        // Config antiga, sem o campo, cai no mesmo caminho seguro do `auto`.
+        let mut legacy = scale_with_sample_interval(400);
+        legacy.stability_mode = String::new();
+        legacy.parser_regex = r"([-+]?\d+[\.,]?\d*)\s*kg?".to_string();
+        assert!(!trusts_indicator_signal(&legacy));
+    }
+
+    #[test]
+    fn explicit_modes_override_the_protocol() {
+        let mut forced_window = scale_with_sample_interval(400);
+        forced_window.stability_mode = "window".to_string();
+        forced_window.parser_regex = "toledo:ti200".to_string();
+        assert!(!trusts_indicator_signal(&forced_window));
+
+        let mut forced_indicator = scale_with_sample_interval(400);
+        forced_indicator.stability_mode = "indicator".to_string();
+        forced_indicator.parser_regex = r"([-+]?\d+[\.,]?\d*)\s*kg?".to_string();
+        assert!(trusts_indicator_signal(&forced_indicator));
     }
 
     #[test]
