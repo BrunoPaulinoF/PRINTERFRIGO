@@ -283,15 +283,35 @@ A estabilizacao roda inteira dentro do app, com a porta da balanca aberta e
 varias amostras por segundo. Ela nao depende do intervalo de polling nem de
 falar com o KyberFrigo entre uma leitura e outra.
 
+### Criterio De Estabilidade
+
+Ha dois criterios, no campo `stabilityMode`:
+
+- **`indicator` (padrao, recomendado)** — confia no aviso da propria balanca.
+  Um indicador Toledo TI200/Prix responde `III,III` enquanto a peca se move e so
+  devolve numero quando trava o peso. Entao toda leitura numerica ja e o
+  indicador declarando peso parado, e bastam `stableWindow` leituras seguidas
+  (padrao `2`) que concordem entre si dentro da tolerancia. E o mais rapido e o
+  mais correto: quem decide e o mesmo circuito que a metrologia legal aprovou.
+- **`window`** — mede a variancia aqui, exigindo que todas as leituras dos
+  ultimos `stableMs` caibam na tolerancia. Use so quando a balanca transmite
+  peso ao vivo e nunca declara movimento.
+
+A concordancia entre as leituras e exigida nos dois modos. No modo `indicator`
+ela e a rede de seguranca: se a balanca estiver num modo que transmite ao vivo
+sem declarar movimento, duas leituras seguidas dentro de 100 g ainda impedem
+capturar no meio do balanco. Confirmacoes separadas por muito tempo nao valem —
+entre elas a peca pode ter entrado e saido de movimento.
+
 Parametros principais:
 
 - `stableThresholdKg`: variacao maxima aceita para considerar estavel. Para
   carcaca no trilho use `0.1` (100 g); para caixa em balanca de bancada da para
   apertar bem mais.
-- `stableMs`: por quanto tempo o peso precisa ficar dentro dessa tolerancia.
-  E o parametro que separa "peca parada" de "peca passando pelo topo do
-  balanco". Padrao `800`.
-- `stableWindow`: minimo de amostras dentro dessa janela de tempo. Padrao `4`.
+- `stableWindow`: quantas leituras confirmam o peso (modo `indicator`, padrao
+  `2`) ou o minimo de amostras na janela (modo `window`).
+- `stableMs`: **so no modo `window`** — por quanto tempo o peso precisa ficar
+  dentro da tolerancia. Ignorado no modo `indicator`.
 - `stableTimeoutMs`: tempo maximo esperando assentar antes de desistir da
   leitura. Padrao `5000`.
 - `sampleIntervalMs`: espera maxima por cada resposta da balanca. Nao e pausa
@@ -303,23 +323,35 @@ Parametros principais:
 Regra operacional:
 
 1. O peso precisa estar acima do minimo.
-2. Todas as leituras dos ultimos `stableMs` precisam variar menos que
-   `stableThresholdKg` — e nao apenas duas leituras seguidas, que podem cair
-   por acaso dentro da tolerancia enquanto a peca balanca.
+2. A balanca precisa confirmar o peso pelo criterio configurado acima.
 3. Depois de capturar, a balanca voltar a zero libera a proxima peca.
 4. Se ela nao voltar a zero, uma variacao de peso maior que a tolerancia
    tambem libera.
 
 Isso evita imprimir varias etiquetas para a mesma carcaca/caixa.
 
+### Forcar Leitura Com A Peca Em Movimento
+
+Se o operador clicar para capturar e a balanca **nao** confirmar o peso dentro
+de `stableTimeoutMs`, **nada e capturado**. Aparece um aviso pedindo para
+esperar a peca parar e clicar de novo, e o motivo fica no log local.
+
+Isso e proposital: peso nao confirmado virando volume e peso errado em nota
+fiscal. Repetir o clique custa segundos; corrigir o volume depois custa muito
+mais. O comando recusado tambem nao fica pendente — o app nao captura sozinho
+quando a peca finalmente assentar, porque a essa altura ela pode ser outra.
+
 ### Ajuste Fino Da Velocidade
 
-- Pesagem demorando para fechar: baixe `stableMs` (ex.: `600`) ou suba
+- Pesagem demorando para fechar no modo `indicator`: confira se
+  `sampleIntervalMs` nao esta baixo demais (piso de `250`). Abaixo disso a
+  balanca nao responde a tempo e nenhuma amostra vale.
+- Pesagem demorando no modo `window`: baixe `stableMs` (ex.: `600`) ou suba
   `stableThresholdKg`. Comece pela tolerancia.
-- Peso fechando cedo demais, ainda no balanco: suba `stableMs` (ex.: `1200`)
-  antes de apertar a tolerancia.
+- Peso fechando cedo demais, ainda no balanco: suba `stableWindow` para `3`
+  antes de mexer em qualquer outra coisa.
 - `stableTimeoutMs` nao acelera nada: ele so limita quanto tempo o app insiste
-  numa peca que nao para.
+  numa peca que nao para antes de recusar a captura.
 
 ## Configuracao Da Impressora
 

@@ -114,7 +114,11 @@ test("station fields include short operator help tooltips", async () => {
   assert.ok(source.includes("function FieldLabel"), "UI must use a shared label helper for field help");
   assert.ok(source.includes('className="help-tip"'), "field help must render visible question-mark tips");
   assert.ok(source.includes('Peso minimo kg</FieldLabel>'), "minimum weight field must explain capture threshold");
-  assert.ok(source.includes('Amostras minimas</FieldLabel>'), "minimum sample field must have operator help");
+  assert.ok(
+    /help=\{scale\.stabilityMode === "window"[\s\S]{0,320}"Amostras minimas" : "Confirmacoes"\}<\/FieldLabel>/.test(source),
+    "the confirmation/sample field must have operator help and name itself after the criterion in use",
+  );
+  assert.ok(source.includes('Criterio de estabilidade</FieldLabel>'), "the stability criterion selector must have operator help");
   assert.ok(source.includes('Tolerancia kg</FieldLabel>'), "stability tolerance field must have operator help");
   assert.ok(source.includes('Estabilidade ms</FieldLabel>'), "stability period field must have operator help");
   assert.ok(source.includes('Tempo limite ms</FieldLabel>'), "stabilisation timeout field must have operator help");
@@ -193,4 +197,96 @@ test("the topbar version button drives the manual update flow", async () => {
   assert.ok(source.includes('updateCheck.status === "available"'), "a newer version must surface an update action");
   assert.ok(source.includes("Atualizar para "), "the update action must name the target version");
   assert.ok(source.includes("dismissUpdateCheck"), "the operator must be able to dismiss the prompt without updating");
+});
+
+test("the scale response deadline cannot be set below what a serial indicator needs", async () => {
+  const appSource = await readFile(appPath, "utf8");
+  const hardwarePath = new URL("../src-tauri/src/hardware.rs", import.meta.url);
+  const hardwareSource = await readFile(hardwarePath, "utf8");
+
+  // A v0.5.6 saiu com 60ms de prazo de resposta. O TI200 nao responde a um ENQ
+  // nesse tempo — o caminho antigo lhe dava 250ms de sleep mais 1500ms de
+  // timeout. Resultado: toda amostra estourava, a janela nunca acumulava, e as
+  // 221 capturas do recebimento foram gravadas com stable=false.
+  assert.ok(hardwareSource.includes("MIN_RESPONSE_WAIT_MS"), "Rust must floor the response deadline");
+  assert.ok(
+    /const MIN_RESPONSE_WAIT_MS: u64 = (2[5-9][0-9]|[3-9][0-9]{2}|[0-9]{4,});/.test(hardwareSource),
+    "the response deadline floor must be at least 250 ms",
+  );
+  assert.ok(
+    /const SERIAL_POLL_MS: u64 = \d+;/.test(hardwareSource),
+    "the port poll step must be its own constant, separate from the response deadline",
+  );
+
+  // Configuracao ja salva na estacao precisa ser corrigida ao carregar, senao
+  // atualizar o app nao resolve nada.
+  assert.ok(appSource.includes("repairSampleInterval"), "saved configs must be repaired on load");
+  assert.ok(
+    /const MIN_SAMPLE_INTERVAL_MS = (2[5-9][0-9]|[3-9][0-9]{2}|[0-9]{4,});/.test(appSource),
+    "the frontend floor must match the Rust one",
+  );
+  assert.ok(
+    /repairSampleInterval\(\{ \.\.\.defaultConfig\.scale, \.\.\.scale \}\)/.test(appSource),
+    "every scale in the list must be repaired, not just the primary one",
+  );
+  assert.equal(appSource.includes("sampleIntervalMs: 60"), false, "the broken default must be gone");
+});
+
+test("a lost frame does not wipe the stability window", async () => {
+  const hardwarePath = new URL("../src-tauri/src/hardware.rs", import.meta.url);
+  const hardwareSource = await readFile(hardwarePath, "utf8");
+
+  // Zerar a janela a cada falha de transporte fazia uma balanca so um pouco
+  // mais lenta nunca estabilizar: cada amostra atrasada apagava as boas.
+  const errorArm = hardwareSource.match(/Err\(err\) => \{[\s\S]*?samples\.clear\(\);[\s\S]*?last_error = Some\(err\);/);
+  assert.ok(errorArm, "the sampling loop must still handle read errors");
+  assert.ok(
+    /if err\.contains\("instavel"\)[\s\S]*?\{\s*\n\s*samples\.clear\(\);/.test(errorArm[0]),
+    "only an indicator-declared instability may clear the window",
+  );
+});
+
+test("stability can come from the indicator itself, confirmed by a couple of readings", async () => {
+  const appSource = await readFile(appPath, "utf8");
+  const hardwarePath = new URL("../src-tauri/src/hardware.rs", import.meta.url);
+  const hardwareSource = await readFile(hardwarePath, "utf8");
+
+  // O TI200 responde III,III enquanto a peca se move e so devolve numero
+  // quando trava o peso. Medir variancia por 1,2s aqui repete um trabalho que
+  // o indicador ja fez, e cobra esse tempo em cada carcaca.
+  assert.ok(hardwareSource.includes("evaluate_indicator_stability"), "there must be an indicator-driven criterion");
+  assert.ok(
+    /let trusts_indicator = !config\.stability_mode\.eq_ignore_ascii_case\("window"\);/.test(hardwareSource),
+    "indicator mode must be the default, with window mode as the opt-out",
+  );
+  assert.ok(
+    /if now_ms\.saturating_sub\(oldest\.at_ms\) > max_span_ms/.test(hardwareSource),
+    "stale readings must not confirm each other",
+  );
+  assert.ok(
+    /let needed = confirmations\.max\(2\);/.test(hardwareSource),
+    "a single reading must never be enough, whatever the config says",
+  );
+  assert.ok(appSource.includes('stabilityMode: "indicator"'), "the app default must trust the indicator");
+});
+
+test("a forced capture is refused when the scale never confirmed the weight", async () => {
+  const source = await readFile(appPath, "utf8");
+
+  // Peso nao confirmado virando volume e peso errado em nota fiscal. Repetir o
+  // clique custa segundos; corrigir o volume depois custa muito mais.
+  const manualBlock = source.match(/const reading = await readScaleStable\(scale\);[\s\S]*?await submitCapture\(session, weight, commandId, reading\.stable\);/);
+  assert.ok(manualBlock, "the forced-capture path must be readable as a block");
+  const refusalIndex = manualBlock[0].search(/if \(!reading\.stable\) \{/);
+  const submitIndex = manualBlock[0].search(/await submitCapture/);
+  assert.ok(refusalIndex >= 0, "the forced-capture path must check the stable flag");
+  assert.ok(refusalIndex < submitIndex, "the refusal must come before the submit");
+  assert.ok(
+    /throw new Error\(\s*`Balanca ainda em movimento/.test(manualBlock[0]),
+    "the operator must be told why nothing was captured",
+  );
+  assert.ok(
+    /handledCommands\.current\.add\(commandId\);[\s\S]{0,600}throw new Error\(\s*`Balanca ainda em movimento/.test(manualBlock[0]),
+    "the refused command must be marked handled so it does not capture on its own once the piece settles",
+  );
 });
