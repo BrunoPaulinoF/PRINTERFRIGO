@@ -293,12 +293,15 @@ peca ainda se move.** O campo `stabilityMode` tem tres valores:
   `indicator`; as demais usam `window`. A regra vive em `parser_declares_motion`
   (`src-tauri/src/hardware.rs`) — hoje vale para a familia `toledo:ti200`
   (TI200/Prix/9091, Protocol G).
-- **`indicator`** — sempre confia no aviso da balanca. Um TI200 responde
-  `III,III` enquanto a peca se move e so devolve numero quando trava o peso.
-  Entao toda leitura numerica ja e o indicador declarando peso parado, e bastam
-  `stableWindow` leituras seguidas (padrao `2`) que concordem dentro da
-  tolerancia. E o mais rapido e o mais correto: quem decide e o mesmo circuito
-  que a metrologia legal aprovou.
+- **`indicator`** — usa o aviso da balanca como GATILHO. Um TI200 responde
+  `III,III` enquanto a peca se move e so devolve numero quando trava o peso,
+  entao toda leitura numerica ja e o indicador declarando peso parado: bastam
+  `stableWindow` leituras seguidas que concordem dentro da tolerancia **e** a
+  janela de `stableMs` sem o peso andar. O aviso da balanca e o que torna isso
+  rapido; a janela e o que impede capturar cedo demais. **O indicador sozinho
+  nao basta:** ele trava o peso a cada pausa da carcaca, e uma carcaca no
+  trilho pausa varias vezes enquanto assenta — em 11/08/2026 o ponto 1 da ESS
+  travou em 53,9 kg uma peca que so parou em 52,9 kg.
 - **`window`** — sempre mede a variancia aqui, exigindo que todas as leituras
   dos ultimos `stableMs` caibam na tolerancia.
 
@@ -329,25 +332,44 @@ Parametros principais:
   apertar bem mais.
 - `stableWindow`: quantas leituras confirmam o peso (modo `indicator`, padrao
   `2`) ou o minimo de amostras na janela (modo `window`).
-- `stableMs`: **so no criterio `window`** — por quanto tempo o peso precisa
-  ficar dentro da tolerancia. Ignorado no criterio `indicator`.
+- `stableMs`: por quanto tempo o peso precisa ficar SEM ANDAR para a leitura
+  valer. Vale nos dois criterios. Aumente se a carne da planta demora mais para
+  assentar. Alem de caber na tolerancia, a janela nao pode estar caminhando num
+  sentido so: numa balanca de 100 g de divisao o assentamento desce em degraus
+  que cabem na tolerancia, e e a deriva entre as metades da janela que separa
+  peso parado de peso ainda caindo (`window_drift_kg`).
 - `stableTimeoutMs`: tempo maximo esperando assentar antes de desistir da
   leitura. Padrao `5000`.
 - `sampleIntervalMs`: espera maxima por cada resposta da balanca. Nao e pausa
   fixa — a leitura segue assim que o peso chega. Padrao `60`.
-- `minWeightKg`: peso minimo para capturar.
+- `minWeightKg`: peso minimo DA PECA, medido acima de `emptyWeightKg`.
 - `cooldownMs`: tempo minimo entre capturas.
-- `zeroThresholdKg`: peso considerado retorno a zero.
+- `emptyWeightKg`: peso da balanca VAZIA — o gancho, o balancim, a bandeja que
+  nunca sai da celula de carga. Num trilho de carcaca isso e ~8 kg. Deixe `0`
+  numa balanca que zera sozinha.
+- `zeroThresholdKg`: folga em torno de `emptyWeightKg` para considerar a
+  balanca vazia.
 
 Regra operacional:
 
-1. O peso precisa estar acima do minimo.
-2. A balanca precisa confirmar o peso pelo criterio configurado acima.
-3. Depois de capturar, a balanca voltar a zero libera a proxima peca.
-4. Se ela nao voltar a zero, uma variacao de peso maior que a tolerancia
-   tambem libera.
+1. A peca precisa estar na balanca: peso acima de `emptyWeightKg + minWeightKg`.
+   O gancho sozinho nao e peca — e o que impede etiquetar trilho vazio.
+2. A balanca precisa confirmar o peso pelo criterio acima (indicador quando ele
+   existe, sempre com a janela de `stableMs`).
+3. Depois de capturar, a estacao so volta a capturar quando ve a peca **SAIR**:
+   o peso voltar ao da balanca vazia, ou cair mais da metade do que foi
+   capturado.
 
-Isso evita imprimir varias etiquetas para a mesma carcaca/caixa.
+**Rearme e a peca sair, nao o peso mudar.** Uma carcaca assentando muda de peso
+o tempo todo — em 11/08/2026, na ESS, o rearme por variacao de peso rendeu 5
+etiquetas para a mesma carcaca (53,9 → 53,7 → 52,9 → 53,0 → 52,9 kg em 11,7 s).
+E o rearme por zero absoluto nunca acontece num trilho, onde o gancho fica na
+celula de carga. Duas carcacas de peso identico em sequencia continuam rendendo
+duas etiquetas: entre elas o trilho fica vazio, e e isso que rearma.
+
+O preco: se a troca for tao rapida que nenhuma leitura pegue a balanca vazia, a
+peca seguinte fica sem etiqueta e o operador usa FORCAR LEITURA. E o lado certo
+para errar — o inverso devolve as 5 etiquetas por peca.
 
 ### Forcar Leitura Com A Peca Em Movimento
 
@@ -515,8 +537,9 @@ Antes de usar em operacao real:
 
 ### Captura automatica imprime varias etiquetas
 
-- `zeroThresholdKg` baixo demais.
-- Balanca nao volta a zero entre itens.
+- `emptyWeightKg` nao configurado numa balanca de trilho (o gancho fica na
+  celula de carga e a estacao nunca ve a balanca "vazia").
+- `zeroThresholdKg` baixo demais para a oscilacao do gancho.
 - `cooldownMs` curto demais.
 - `stableThresholdKg` alto demais.
 
