@@ -193,6 +193,31 @@ pub fn is_stable(samples: &[f64], threshold_kg: f64) -> bool {
     (max - min).abs() <= threshold_kg + WEIGHT_EPSILON_KG
 }
 
+/// Quanto a janela ANDOU num sentido so, comparando a media da primeira metade
+/// com a da segunda.
+///
+/// Uma carcaca no trilho nao oscila em torno de um valor: ela DESCE em degraus
+/// enquanto assenta e escorre. Numa balanca de 100 g de divisao cada degrau
+/// cabe na tolerancia, entao `is_stable` sozinho aceita a janela e captura um
+/// peso que ainda vai cair. Comparar as metades separa as duas coisas:
+///
+/// - ruido de uma divisao (53,9 / 54,0 / 53,9 / 54,0) da media igual nas duas
+///   metades — e peso parado, tem de passar;
+/// - assentamento (54,0 / 54,0 / 53,9 / 53,9) da media diferente — a peca ainda
+///   esta caindo, tem de esperar.
+///
+/// Abaixo de 4 amostras nao ha metade que signifique nada: devolve 0 e deixa a
+/// decisao com `is_stable`, como era antes.
+pub fn window_drift_kg(window: &[f64]) -> f64 {
+    if window.len() < 4 {
+        return 0.0;
+    }
+    let half = window.len() / 2;
+    let first: f64 = window[..half].iter().sum::<f64>() / half as f64;
+    let last: f64 = window[window.len() - half..].iter().sum::<f64>() / half as f64;
+    (last - first).abs()
+}
+
 /// Amostra de peso com o instante (ms desde o inicio da leitura) em que chegou.
 #[derive(Debug, Clone, Copy)]
 pub struct WeightSample {
@@ -295,6 +320,12 @@ pub fn evaluate_stability(
         return None;
     }
     if !is_stable(&window, threshold_kg) {
+        return None;
+    }
+    // Caber na tolerancia nao basta: a carcaca assenta em degraus que cabem
+    // nela. Meia tolerancia de deriva entre as metades da janela e menos que a
+    // divisao da balanca, entao so passa peso que parou de andar.
+    if window_drift_kg(&window) > threshold_kg / 2.0 + WEIGHT_EPSILON_KG {
         return None;
     }
     // Devolve a ultima leitura, nao a media: preserva o valor exato mostrado no
@@ -956,6 +987,22 @@ pub fn read_scale_stable(config: ScaleConfig) -> Result<StableReading, String> {
                 let keep_ms = (stable_ms * 2).max(confirmation_span_ms * 2);
                 let cutoff = elapsed_ms.saturating_sub(keep_ms);
                 samples.retain(|sample| sample.at_ms >= cutoff);
+                // O indicador e o GATILHO, nao a prova. O TI200 declara peso
+                // travado a cada pausa da carcaca, e uma carcaca no trilho
+                // pausa varias vezes enquanto assenta: em 11/08/2026, no ponto
+                // 1 da ESS, ele travou em 53,9 kg uma peca que so parou em
+                // 52,9 kg — 1 kg a mais na etiqueta e na nota. Confiar so no
+                // indicador e rapido e errado; medir so aqui e certo e lento.
+                // Exigir os dois mantem a velocidade (a janela so comeca a
+                // fechar depois que o indicador ja travou) e devolve o peso
+                // que a peca realmente tem.
+                let window_settled = evaluate_stability(
+                    &samples,
+                    elapsed_ms,
+                    stable_ms,
+                    config.stable_window,
+                    config.stable_threshold_kg,
+                );
                 let settled = if trusts_indicator {
                     evaluate_indicator_stability(
                         &samples,
@@ -964,14 +1011,9 @@ pub fn read_scale_stable(config: ScaleConfig) -> Result<StableReading, String> {
                         confirmation_span_ms,
                         config.stable_threshold_kg,
                     )
+                    .and(window_settled)
                 } else {
-                    evaluate_stability(
-                        &samples,
-                        elapsed_ms,
-                        stable_ms,
-                        config.stable_window,
-                        config.stable_threshold_kg,
-                    )
+                    window_settled
                 };
                 if let Some(stable_weight) = settled {
                     return Ok(StableReading {
@@ -981,7 +1023,7 @@ pub fn read_scale_stable(config: ScaleConfig) -> Result<StableReading, String> {
                         elapsed_ms: started.elapsed().as_millis() as u64,
                         reason: if trusts_indicator {
                             format!(
-                                "balanca declarou peso parado, confirmado por {} leituras",
+                                "balanca declarou peso parado ({} leituras) e o peso ficou sem andar por {stable_ms} ms",
                                 config.stable_window.max(2)
                             )
                         } else {
@@ -1508,6 +1550,42 @@ mod tests {
         ]);
         let weight = evaluate_stability(&samples, 800, 800, 4, 0.1).expect("deveria estabilizar");
         assert!((weight - 42.4).abs() < 0.0001);
+    }
+
+    #[test]
+    fn stability_rejects_a_carcass_still_settling_inside_the_tolerance() {
+        // Degraus de 100 g cabem na tolerancia de 100 g, mas a peca ainda esta
+        // descendo. Foi assim que a ESS etiquetou 53,9 kg uma carcaca que so
+        // parou em 52,9 kg.
+        let samples = sampled(&[
+            (0, 54.0),
+            (200, 54.0),
+            (400, 53.9),
+            (600, 53.9),
+            (800, 53.9),
+        ]);
+        assert!(evaluate_stability(&samples, 800, 800, 4, 0.1).is_none());
+    }
+
+    #[test]
+    fn stability_accepts_one_division_of_dither() {
+        // Balanca de 100 g de divisao oscilando entre duas leituras vizinhas e
+        // peso PARADO: as duas metades da janela tem a mesma media.
+        let samples = sampled(&[
+            (0, 53.9),
+            (200, 54.0),
+            (400, 53.9),
+            (600, 54.0),
+            (800, 53.9),
+        ]);
+        assert!(evaluate_stability(&samples, 800, 800, 4, 0.1).is_some());
+    }
+
+    #[test]
+    fn drift_needs_two_halves_to_mean_anything() {
+        assert!((window_drift_kg(&[54.0, 53.9, 53.9]) - 0.0).abs() < 1e-9);
+        assert!(window_drift_kg(&[54.0, 54.0, 53.8, 53.8]) > 0.19);
+        assert!(window_drift_kg(&[53.9, 54.0, 53.9, 54.0]) < 1e-9);
     }
 
     #[test]

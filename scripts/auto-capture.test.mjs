@@ -3,26 +3,111 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 const appPath = new URL("../src/App.tsx", import.meta.url);
+
+// O modulo so tem sintaxe apagavel (`import type`, anotacoes), entao o type
+// stripping nativo do Node carrega o arquivo .ts direto — o teste exercita a
+// regra real, sem copia nem transpilador no meio.
+const autoCapture = await import("../src/auto-capture.ts");
+const autoCaptureSource = await readFile(new URL("../src/auto-capture.ts", import.meta.url), "utf8");
+
+/** Estacao de trilho da ESS: gancho de 8 kg que nunca sai da celula de carga. */
+const RAIL_SCALE = { emptyWeightKg: 8, minWeightKg: 10, zeroThresholdKg: 0.25 };
+/** Bancada comum: zera de verdade e ninguem configurou peso de base. */
+const BENCH_SCALE = { emptyWeightKg: 0, minWeightKg: 1, zeroThresholdKg: 0.25 };
+
+/**
+ * Roda a maquina de estados da captura automatica sobre uma sequencia de
+ * leituras estaveis e devolve o que teria virado etiqueta.
+ */
+function runAutoCapture(readings, scale) {
+  const state = { armed: true, lastCapturedWeight: null };
+  const captured = [];
+  for (const weight of readings) {
+    if (!state.armed) {
+      if (autoCapture.hasReleasedPiece(weight, state.lastCapturedWeight, scale)) {
+        state.armed = true;
+        state.lastCapturedWeight = null;
+      }
+      continue;
+    }
+    if (!autoCapture.hasPieceOnScale(weight, scale)) continue;
+    captured.push(weight);
+    state.lastCapturedWeight = weight;
+    state.armed = false;
+  }
+  return captured;
+}
 const apiPath = new URL("../src/api.ts", import.meta.url);
 const queuePath = new URL("../src-tauri/src/queue.rs", import.meta.url);
 
-test("automatic capture uses lease, cooldown, and weight-change rearm", async () => {
+test("automatic capture uses lease, cooldown, and release-based rearm", async () => {
   const source = await readFile(appPath, "utf8");
 
   assert.ok(source.includes("AUTO_SESSION_LEASE_TIMEOUT_MS"), "auto capture must ignore stale browser sessions");
   assert.ok(source.includes("hasFreshAutoSessionLease(session"), "auto loop must check the browser lease before weighing");
   assert.ok(source.includes("lastCapturedWeight"), "auto loop must remember the last captured weight");
-  assert.ok(source.includes("hasMeaningfulWeightChange"), "auto loop must rearm on weight change instead of requiring zero");
   assert.ok(source.includes("cooldownElapsed"), "auto loop must keep cooldown protection");
-  assert.ok(source.includes("weightChanged"), "auto loop must avoid duplicate labels for unchanged stable weight");
-  assert.equal(source.includes("waitingZero"), false, "auto loop must not require returning to zero between captures");
   assert.ok(source.includes("AUTO_POLL_MS"), "auto polling must have its own faster poll interval");
   assert.ok(source.includes("hasAutoSession"), "auto polling must accelerate when auto sessions are active");
   assert.equal(source.includes("stableWindow: 5"), false, "default stability window must not keep the old slow value");
-  assert.ok(
-    source.includes("sawZeroSinceCapture"),
-    "returning to zero must rearm capture, otherwise two carcasses within the tolerance in a row lose the second label",
+});
+
+test("only the piece LEAVING the scale rearms the next capture", async () => {
+  const source = await readFile(appPath, "utf8");
+
+  // O rearme por variacao de peso rendeu 5 etiquetas para uma carcaca na ESS em
+  // 11/08/2026 (53,9 / 53,7 / 52,9 / 53,0 / 52,9 kg em 11,7 s): a peca assenta
+  // escorrendo e passa dos 100 g a cada leitura. E o rearme por zero absoluto
+  // nunca acontece num trilho, onde o gancho de ~8 kg fica na celula de carga.
+  assert.equal(
+    source.includes("hasMeaningfulWeightChange"),
+    false,
+    "weight change must not rearm capture — a settling carcass changes weight all the time",
   );
+  assert.equal(
+    source.includes("sawZeroSinceCapture"),
+    false,
+    "absolute zero never happens on a rail scale; the hook stays on the load cell",
+  );
+  assert.ok(source.includes('from "./auto-capture"'), "the rule must live in its own module, loadable by the tests");
+  assert.ok(source.includes("state.armed"), "the auto loop must hold a disarmed state until the piece leaves");
+  assert.ok(
+    /if \(!state\.armed\) \{[\s\S]*?hasReleasedPiece\(weight, state\.lastCapturedWeight, scale\)[\s\S]*?continue;/.test(source),
+    "a disarmed session must only rearm through hasReleasedPiece, and capture nothing meanwhile",
+  );
+
+  const release = autoCaptureSource.match(/export function hasReleasedPiece[\s\S]*?\n\}/);
+  assert.ok(release, "hasReleasedPiece must be readable as a block");
+  assert.ok(
+    release[0].includes("emptyWeight + scale.zeroThresholdKg"),
+    "returning to the empty-scale weight (hook included) must rearm",
+  );
+  assert.ok(
+    release[0].includes("lastCapturedWeight * (1 - RELEASE_DROP_RATIO)"),
+    "a big relative drop must rearm too, for stations that never configured the hook weight",
+  );
+  assert.ok(
+    /export const RELEASE_DROP_RATIO = 0\.[1-9]/.test(autoCaptureSource),
+    "the release ratio must be an explicit constant, not a magic number in the loop",
+  );
+});
+
+test("the empty-scale weight is a configured property of the station", async () => {
+  const source = await readFile(appPath, "utf8");
+  const typesSource = await readFile(new URL("../src/types.ts", import.meta.url), "utf8");
+
+  // Numa balanca de trilho a balanca nunca esta em zero: o gancho fica nela. Sem
+  // dizer isso, "peso minimo" mede o gancho junto e a estacao etiqueta o gancho
+  // vazio — foi o que gerou volumes de 8,0 e 8,1 kg no recebimento da ESS.
+  assert.ok(typesSource.includes("emptyWeightKg"), "the scale config type must carry the empty-scale weight");
+  assert.ok(source.includes("emptyWeightKg: 0"), "the default must keep today's behaviour for scales that zero out");
+  assert.ok(autoCaptureSource.includes("export function emptyWeightOf"), "reading the empty weight must go through one helper");
+  assert.ok(autoCaptureSource.includes("export function hasPieceOnScale"), "there must be one place deciding a piece is on the scale");
+  assert.ok(
+    /emptyWeightOf\(scale\) \+ scale\.minWeightKg/.test(autoCaptureSource),
+    "the minimum weight must be measured above the hook, not from zero",
+  );
+  assert.ok(source.includes("Peso do gancho/base kg</FieldLabel>"), "the operator must be able to set it on the station screen");
 });
 
 test("stabilisation happens natively instead of one sample per service tick", async () => {
@@ -319,4 +404,111 @@ test("a forced capture is refused when the scale never confirmed the weight", as
     /handledCommands\.current\.add\(commandId\);[\s\S]{0,600}throw new Error\(\s*`Balanca ainda em movimento/.test(manualBlock[0]),
     "the refused command must be marked handled so it does not capture on its own once the piece settles",
   );
+});
+
+test("the indicator triggers the capture but the window confirms the weight", async () => {
+  const hardwarePath = new URL("../src-tauri/src/hardware.rs", import.meta.url);
+  const hardwareSource = await readFile(hardwarePath, "utf8");
+
+  // O TI200 declara peso travado a cada pausa da carcaca, e uma carcaca no
+  // trilho pausa varias vezes enquanto assenta. Confiar so nele e rapido e
+  // errado; medir so aqui e certo e lento. Os dois juntos sao rapidos e certos:
+  // a janela so comeca a fechar depois que o indicador ja travou.
+  const loop = hardwareSource.match(/let window_settled = evaluate_stability\([\s\S]*?\};/);
+  assert.ok(loop, "the reading loop must evaluate the time window on every sample");
+  assert.ok(
+    /evaluate_indicator_stability\([\s\S]*?\)\s*\.and\(window_settled\)/.test(loop[0]),
+    "indicator mode must ALSO require the time window, not replace it",
+  );
+  assert.ok(
+    /\} else \{\s*\n\s*window_settled\s*\n\s*\};/.test(loop[0]),
+    "the measured criterion must stay untouched for scales that never declare motion",
+  );
+
+  // A tolerancia sozinha aceita o assentamento: numa balanca de 100 g de
+  // divisao cada degrau cabe nela. A deriva entre as metades da janela e o que
+  // separa peso parado de peso ainda caindo.
+  assert.ok(hardwareSource.includes("pub fn window_drift_kg"), "there must be a drift check on the window");
+  assert.ok(
+    /if window_drift_kg\(&window\) > threshold_kg \/ 2\.0/.test(hardwareSource),
+    "evaluate_stability must refuse a window that is still walking in one direction",
+  );
+});
+
+test("the station keeps the settling window it was configured with", async () => {
+  const source = await readFile(appPath, "utf8");
+
+  // stableMs existia e era ignorado no modo indicador. Voltando a valer, ele e
+  // o tempo que a peca precisa ficar sem andar — o campo que o operador ajusta
+  // se a carcaca da planta dele assenta mais devagar.
+  assert.ok(source.includes("Estabilidade ms</FieldLabel>"), "the settling window must stay on the station screen");
+  assert.equal(
+    /Estabilidade ms<\/FieldLabel><input[^>]*disabled=\{scale\.stabilityMode === "indicator"\}/.test(source),
+    false,
+    "the settling window is no longer ignored in indicator mode, so it must not be greyed out",
+  );
+});
+
+// ──────────────────────────────────────────────────────────────
+// A regra rodando de verdade, sobre os dados da ESS
+// ──────────────────────────────────────────────────────────────
+
+test("the 11/08/2026 burst yields exactly one label per carcass", () => {
+  // Leituras gravadas em hardware_capture_events (sessao a339e310, ponto1),
+  // na ordem em que a estacao as considerou estaveis. Cinco carcacas foram
+  // pesadas; sairam 19 etiquetas.
+  const captured = runAutoCapture([
+    53.9, 53.7, 52.9, 53.0, 52.9, // carcaca 1, assentando
+    8.0,                          // gancho vazio: a peca saiu
+    52.2, 50.5,                   // carcaca 2, assentando
+    8.1,                          // gancho vazio
+    50.7, 49.6,                   // carcaca 3
+    8.0,                          // gancho vazio
+    51.6, 49.4, 49.5, 49.4,       // carcaca 4
+  ], RAIL_SCALE);
+
+  assert.deepEqual(captured, [53.9, 52.2, 50.7, 51.6], "one label per piece, and the hook never gets one");
+});
+
+test("two carcasses of the same weight in a row still get two labels", () => {
+  // O caso que o rearme por variacao de peso existia para cobrir. Com o
+  // trilho ficando vazio entre elas, o peso identico deixa de importar.
+  const captured = runAutoCapture([52.0, 8.0, 52.0, 8.0, 52.0], RAIL_SCALE);
+
+  assert.deepEqual(captured, [52.0, 52.0, 52.0]);
+});
+
+test("a settling carcass never rearms on its own, however long it drips", () => {
+  const captured = runAutoCapture([54.0, 53.8, 53.5, 53.0, 52.4, 51.9, 51.5], RAIL_SCALE);
+
+  assert.deepEqual(captured, [54.0], "half the captured weight has to disappear before the next capture");
+});
+
+test("the empty hook never reaches the minimum piece weight", () => {
+  assert.equal(autoCapture.hasPieceOnScale(8.1, RAIL_SCALE), false, "hook alone is not a piece");
+  assert.equal(autoCapture.hasPieceOnScale(17.9, RAIL_SCALE), false, "8 kg hook + 9,9 kg piece is below the 10 kg minimum");
+  assert.equal(autoCapture.hasPieceOnScale(18.0, RAIL_SCALE), true, "8 kg hook + 10 kg piece is a piece");
+});
+
+test("a bench scale with no configured base keeps behaving as before", () => {
+  const captured = runAutoCapture([20.0, 0.0, 21.5, 0.0, 19.8], BENCH_SCALE);
+
+  assert.deepEqual(captured, [20.0, 21.5, 19.8]);
+  assert.equal(autoCapture.hasReleasedPiece(0.1, 20.0, BENCH_SCALE), true, "returning to zero releases");
+  assert.equal(autoCapture.hasReleasedPiece(19.9, 20.0, BENCH_SCALE), false, "same piece still on the bench");
+  assert.equal(autoCapture.hasReleasedPiece(9.0, 20.0, BENCH_SCALE), true, "losing half the weight means the piece left");
+});
+
+test("the first capture of a session never waits for a release", () => {
+  assert.equal(autoCapture.hasReleasedPiece(53.9, null, RAIL_SCALE), true);
+});
+
+test("a swap the scale never saw empty costs a label, not a duplicate", () => {
+  // Trade-off deliberado. Se o operador trocar a peca tao rapido que nenhuma
+  // leitura pega o trilho vazio, a segunda carcaca fica sem etiqueta e o
+  // operador usa FORCAR LEITURA. O inverso — capturar na duvida — devolve as
+  // 5 etiquetas por peca, que e o defeito que estamos corrigindo.
+  const captured = runAutoCapture([53.9, 52.0], RAIL_SCALE);
+
+  assert.deepEqual(captured, [53.9], "no empty reading in between means no rearm");
 });

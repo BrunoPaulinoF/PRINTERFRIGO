@@ -31,6 +31,7 @@ import {
   testScaleParse,
   writeLocalLog,
 } from "./api";
+import { emptyWeightOf, hasPieceOnScale, hasReleasedPiece } from "./auto-capture";
 import type { AutoConfigureResult, LocalLogEntry, PendingCaptureSubmit, PendingPrintJobReport, PortInfo, PrinterConfig, PrinterInfo, ScaleConfig, StableReading, StationConfig } from "./types";
 
 const BUILD_VERSION = "0.5.8";
@@ -96,11 +97,9 @@ type HeartbeatResult = {
 type AutoSessionState = {
   lastCapturedAt: number;
   lastCapturedWeight: number | null;
-  // A balanca voltou ao zero depois da ultima captura, ou seja, a peca anterior
-  // saiu do gancho. Rearma a captura mesmo quando a peca seguinte pesa quase o
-  // mesmo que a anterior — algo comum em carcacas e invisivel para a checagem
-  // de variacao de peso quando a tolerancia e de 100 g.
-  sawZeroSinceCapture: boolean;
+  // Captura ARMADA. Depois de pesar uma peca a estacao so volta a capturar
+  // quando ve a peca SAIR — nao quando o peso muda. Ver `hasReleasedPiece`.
+  armed: boolean;
 };
 
 type LocalLogLevel = "info" | "warn" | "error";
@@ -119,11 +118,6 @@ function hasFreshAutoSessionLease(session: HardwareSession, nowMs = Date.now()) 
   const rawLeaseAt = typeof session.context.browserLeaseAt === "string" ? session.context.browserLeaseAt : "";
   const leaseAt = rawLeaseAt ? new Date(rawLeaseAt).getTime() : NaN;
   return Number.isFinite(leaseAt) && nowMs - leaseAt <= AUTO_SESSION_LEASE_TIMEOUT_MS;
-}
-
-function hasMeaningfulWeightChange(weight: number, lastCapturedWeight: number | null, thresholdKg: number) {
-  if (lastCapturedWeight === null) return true;
-  return Math.abs(weight - lastCapturedWeight) > Math.max(0.001, thresholdKg);
 }
 
 function makeAutoCaptureKey() {
@@ -160,6 +154,7 @@ const defaultConfig: StationConfig = {
     minWeightKg: 1,
     cooldownMs: 1500,
     zeroThresholdKg: 0.25,
+    emptyWeightKg: 0,
     stableTimeoutMs: 5000,
     sampleIntervalMs: 400,
     stabilityMode: "auto",
@@ -786,9 +781,10 @@ export function App() {
             `Balanca ainda em movimento (ultima leitura ${weight.toFixed(3)} kg). Espere a peca parar e clique novamente.`,
           );
         }
-        if (weight < scale.minWeightKg) {
+        if (!hasPieceOnScale(weight, scale)) {
           handledCommands.current.add(commandId);
-          throw new Error(`Peso ${weight.toFixed(3)} kg abaixo do minimo ${scale.minWeightKg.toFixed(3)} kg.`);
+          const floor = emptyWeightOf(scale) + scale.minWeightKg;
+          throw new Error(`Peso ${weight.toFixed(3)} kg abaixo do minimo ${floor.toFixed(3)} kg.`);
         }
         await submitCapture(session, weight, commandId, reading.stable);
         handledCommands.current.add(commandId);
@@ -803,7 +799,7 @@ export function App() {
       if (session.mode !== "AUTO" || session.status !== "ACTIVE") continue;
       if (!hasFreshAutoSessionLease(session, Number.isFinite(serverNowMs) ? serverNowMs : Date.now())) continue;
       const state = autoSessions.current.get(session.id)
-        ?? { lastCapturedAt: 0, lastCapturedWeight: null, sawZeroSinceCapture: true };
+        ?? { lastCapturedAt: 0, lastCapturedWeight: null, armed: true };
       const scale = scaleForSession(session);
 
       // A estabilizacao inteira acontece dentro de uma unica chamada nativa,
@@ -829,17 +825,20 @@ export function App() {
       const weight = reading.weightKg;
       setLastWeight(weight);
 
-      if (weight <= scale.zeroThresholdKg) {
-        state.lastCapturedWeight = null;
-        state.sawZeroSinceCapture = true;
+      // Rearme: enquanto a peca pesada nao SAIR da balanca, nao existe peca
+      // nova para capturar — por mais que o peso ande. E o que impede a mesma
+      // carcaca de virar 4 ou 5 etiquetas enquanto assenta.
+      if (!state.armed) {
+        if (hasReleasedPiece(weight, state.lastCapturedWeight, scale)) {
+          state.armed = true;
+          state.lastCapturedWeight = null;
+        }
         autoSessions.current.set(session.id, state);
         continue;
       }
 
       const cooldownElapsed = Date.now() - state.lastCapturedAt >= scale.cooldownMs;
-      const weightChanged = state.sawZeroSinceCapture
-        || hasMeaningfulWeightChange(weight, state.lastCapturedWeight, scale.stableThresholdKg);
-      if (reading.stable && cooldownElapsed && weightChanged && weight >= scale.minWeightKg) {
+      if (reading.stable && cooldownElapsed && hasPieceOnScale(weight, scale)) {
         // Marca o peso como capturado ANTES de tentar enviar. submitCapture
         // salva a captura como pendente local e o flushPendingCaptures reenvia
         // se o POST falhar. Sem isso, um envio inicial que falha (rede,
@@ -847,7 +846,7 @@ export function App() {
         // duplicado para a mesma peca com captureId novo.
         state.lastCapturedAt = Date.now();
         state.lastCapturedWeight = weight;
-        state.sawZeroSinceCapture = false;
+        state.armed = false;
         try {
           await submitCapture(session, weight, makeAutoCaptureKey());
         } catch (error) {
@@ -1402,7 +1401,7 @@ export function App() {
                 <div><FieldLabel help="Variacao maxima, em kg, permitida na janela de estabilidade. 0,1 = aceita 100 g de oscilacao (recomendado para carcacas no trilho).">Tolerancia kg</FieldLabel><input type="number" step="0.001" value={scale.stableThresholdKg} onChange={(e) => updateScaleAt(index, { stableThresholdKg: Number(e.target.value) })} /></div>
               </div>
               <div className="split">
-                <div><FieldLabel help="So vale no criterio 'medir aqui': por quanto tempo o peso precisa ficar dentro da tolerancia. Ignorado quando se confia no aviso da balanca.">Estabilidade ms</FieldLabel><input type="number" min="100" step="100" value={scale.stableMs} disabled={scale.stabilityMode === "indicator"} onChange={(e) => updateScaleAt(index, { stableMs: Number(e.target.value) })} /></div>
+                <div><FieldLabel help="Por quanto tempo o peso precisa ficar sem andar para a leitura valer. Vale sempre: mesmo quando a balanca avisa que travou o peso, uma carcaca no trilho trava varias vezes enquanto assenta. Aumente se a carne da sua planta demora mais para parar.">Estabilidade ms</FieldLabel><input type="number" min="100" step="100" value={scale.stableMs} onChange={(e) => updateScaleAt(index, { stableMs: Number(e.target.value) })} /></div>
                 <div><FieldLabel help="Tempo maximo esperando a peca assentar antes de desistir da leitura.">Tempo limite ms</FieldLabel><input type="number" min="500" step="500" value={scale.stableTimeoutMs} onChange={(e) => updateScaleAt(index, { stableTimeoutMs: Number(e.target.value) })} /></div>
               </div>
               <div className="split">
@@ -1410,7 +1409,8 @@ export function App() {
                 <div><FieldLabel help="Espera minima entre duas capturas automaticas, em milissegundos.">Cooldown ms</FieldLabel><input type="number" min="0" value={scale.cooldownMs} onChange={(e) => updateScaleAt(index, { cooldownMs: Number(e.target.value) })} /></div>
               </div>
               <div className="split">
-                <div><FieldLabel help="Peso considerado balanca vazia; libera a captura da proxima peca.">Zero kg</FieldLabel><input type="number" step="0.001" value={scale.zeroThresholdKg} onChange={(e) => updateScaleAt(index, { zeroThresholdKg: Number(e.target.value) })} /></div>
+                <div><FieldLabel help="Peso da balanca VAZIA: o gancho, o balancim ou a bandeja que nunca sai da celula de carga. Num trilho de carcaca isso e ~8 kg, e e o que a estacao usa para saber que a peca saiu e que a proxima ja pode ser pesada. Deixe 0 se a balanca zera sozinha.">Peso do gancho/base kg</FieldLabel><input type="number" step="0.001" value={scale.emptyWeightKg} onChange={(e) => updateScaleAt(index, { emptyWeightKg: Number(e.target.value) })} /></div>
+                <div><FieldLabel help="Folga em torno do peso do gancho para considerar a balanca vazia; libera a captura da proxima peca.">Zero kg</FieldLabel><input type="number" step="0.001" value={scale.zeroThresholdKg} onChange={(e) => updateScaleAt(index, { zeroThresholdKg: Number(e.target.value) })} /></div>
                 <div />
               </div>
               <FieldLabel help="Regra usada para extrair o numero do peso do texto enviado pela balanca.">Regex parser</FieldLabel>

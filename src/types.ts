@@ -15,6 +15,8 @@ export type ScaleConfig = {
   minWeightKg: number;
   cooldownMs: number;
   zeroThresholdKg: number;
+  /** Peso da balanca vazia (gancho, balancim, bandeja). 0 = balanca zera sozinha. */
+  emptyWeightKg: number;
   stableTimeoutMs: number;
   sampleIntervalMs: number;
   stabilityMode: "auto" | "indicator" | "window";
