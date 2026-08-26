@@ -90,6 +90,17 @@ pub fn parse_weight_frame(frame: &str, parser_regex: &str) -> Result<f64, String
         .map_err(|err| format!("Peso invalido '{raw}': {err}"))
 }
 
+/// Padroes do TI200 que ANCORAM o campo do peso (sinal, separador decimal ou
+/// prefixo de status). Compartilhados entre o parser e `frame_is_ambiguous`:
+/// frame que casa com um deles nao precisa da guarda de largura, porque a
+/// ancora ja decidiu qual campo e o peso.
+const TI200_ANCHORED_PATTERNS: [&str; 4] = [
+    r"(?P<weight>[-+]\d{1,6}[\.,]\d{1,6})",
+    r"(?P<weight>[-+]\d{1,7})",
+    r"(?P<weight>\d{1,7}[\.,]\d{1,6})\s*(?:KG|LB)?",
+    r"[-+]\w\s+(?P<weight>\d{6})",
+];
+
 fn parse_toledo_ti200_frame(frame: &str, parser: &str) -> Result<f64, String> {
     let frame = strip_control_chars(frame);
     let upper = frame.to_ascii_uppercase();
@@ -111,12 +122,7 @@ fn parse_toledo_ti200_frame(frame: &str, parser: &str) -> Result<f64, String> {
         .strip_prefix("toledo:ti200:status:")
         .and_then(|v| v.parse::<i32>().ok());
 
-    for pattern in [
-        r"(?P<weight>[-+]\d{1,6}[\.,]\d{1,6})",
-        r"(?P<weight>[-+]\d{1,7})",
-        r"(?P<weight>\d{1,7}[\.,]\d{1,6})\s*(?:KG|LB)?",
-        r"[-+]\w\s+(?P<weight>\d{6})",
-    ] {
+    for pattern in TI200_ANCHORED_PATTERNS {
         let regex = Regex::new(pattern).map_err(|err| format!("Regex TI200 invalido: {err}"))?;
         if let Some(captures) = regex.captures(&frame) {
             let raw = captures
@@ -217,7 +223,21 @@ pub fn frame_is_ambiguous(frame: &str, parser_regex: &str) -> bool {
         return false;
     }
     let stripped = strip_control_chars(frame);
-    // Corridas de digitos longas o bastante para o P05 confundir com o peso.
+    // Frame que casa com um padrao ANCORADO nao e ambiguo: a ancora ja decidiu
+    // qual campo e o peso, e a largura deixa de dizer qualquer coisa.
+    //
+    // Sem esta isencao a v0.5.11 travou a pesagem da ESS. O frame de status do
+    // TI200 — o que a balanca do PONTO3 de fato manda — traz DOZE digitos
+    // legitimos (`+q 000238000001` = 23,8 kg, ha teste desde a v0.3.4), e a
+    // regra de largura abaixo o recusava a cada amostra: `sample_scale` nunca
+    // devolvia peso e a leitura rodava ate o tempo limite, sempre.
+    for pattern in TI200_ANCHORED_PATTERNS {
+        if Regex::new(pattern).map(|re| re.is_match(&stripped)).unwrap_or(false) {
+            return false;
+        }
+    }
+    // Só o fallback P05 (`\d{5,7}`, guloso e SEM ancora) precisa da guarda: e
+    // nele que dois frames colados viram um peso dez vezes maior.
     let runs = stripped
         .split(|ch: char| !ch.is_ascii_digit())
         .filter(|run| run.len() >= 5)
@@ -1014,12 +1034,23 @@ fn sample_scale(
                 // nenhum frame fechou, o laco espera mais bytes — que e o que
                 // ele ja fazia quando o parse falhava.
                 let frames = complete_frames(&decoded);
-                for frame in frames.iter().rev() {
+                // Sem NENHUM frame terminado, o buffer inteiro e o candidato:
+                // e o que oferece a balanca que nao termina frame. Sem esta
+                // saida a amostra so seria tentada no prazo final, e cada
+                // pesagem passava a custar o prazo inteiro. A guarda de
+                // ambiguidade continua valendo sobre ele, entao o frame colado
+                // segue recusado — que e o defeito que importa.
+                let candidates: Vec<&str> = if frames.is_empty() {
+                    vec![decoded.as_str()]
+                } else {
+                    frames.iter().rev().map(|frame| frame.as_str()).collect()
+                };
+                for frame in candidates {
                     if frame_is_ambiguous(frame, &config.parser_regex) {
                         continue;
                     }
                     match parse_weight_frame(frame, &config.parser_regex) {
-                        Ok(weight) => return Ok((weight, frame.clone())),
+                        Ok(weight) => return Ok((weight, frame.to_string())),
                         Err(err) => {
                             // "instavel", "sobrecarga" e "negativo" sao status
                             // que o indicador afirma; nao adianta esperar mais
@@ -1663,6 +1694,44 @@ mod tests {
 
     /// Sem terminador nao ha como separar dois campos, entao a recusa e a unica
     /// resposta honesta — adivinhar qual deles e o peso foi o defeito.
+    /// A v0.5.11 travou a pesagem da ESS por causa deste frame.
+    ///
+    /// O TI200 do PONTO3 manda o frame de STATUS, com doze digitos legitimos —
+    /// formato que o repo ja parseava desde a v0.3.4. A guarda de ambiguidade
+    /// nasceu olhando so para a largura da corrida de digitos e passou a
+    /// recusa-lo a cada amostra: `sample_scale` nunca devolvia peso e a leitura
+    /// rodava ate o tempo limite, em TODA pesagem. Ancora vence largura.
+    #[test]
+    fn the_twelve_digit_status_frame_is_not_ambiguous() {
+        let frame = "+q 000238000001";
+        assert!(
+            !frame_is_ambiguous(frame, "toledo:ti200"),
+            "frame de status do TI200 e legitimo: recusa-lo trava a balanca"
+        );
+        let weight = parse_weight_frame(frame, "toledo:ti200").unwrap();
+        assert!((weight - 23.8).abs() < 0.0001);
+    }
+
+    /// Todo frame que o parser sabe ler tem de sobreviver a guarda — senao a
+    /// guarda desliga a balanca em vez de proteger a etiqueta.
+    #[test]
+    fn every_frame_the_parser_accepts_survives_the_guard() {
+        for (frame, parser) in [
+            ("+q 000238000001", "toledo:ti200"),
+            ("\u{02}00114\u{03}", "toledo:ti200:p05:2"),
+            ("\u{02}+012,345\u{03}", "toledo:ti200"),
+            ("020700", "toledo:ti200:p05:3"),
+            ("ST,GS,+0012.345kg", "toledo:ti200"),
+        ] {
+            if parse_weight_frame(frame, parser).is_ok() {
+                assert!(
+                    !frame_is_ambiguous(frame, parser),
+                    "{frame:?} e lido pelo parser e nao pode ser recusado pela guarda"
+                );
+            }
+        }
+    }
+
     #[test]
     fn an_ambiguous_frame_is_refused_instead_of_guessed() {
         let parser = "toledo:ti200:p05:3";
