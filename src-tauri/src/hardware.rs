@@ -1050,32 +1050,40 @@ fn sample_scale(
                 // nenhum frame fechou, o laco espera mais bytes — que e o que
                 // ele ja fazia quando o parse falhava.
                 let frames = complete_frames(&decoded);
-                // Sem NENHUM frame terminado, o buffer inteiro e o candidato:
-                // e o que oferece a balanca que nao termina frame. Sem esta
-                // saida a amostra so seria tentada no prazo final, e cada
-                // pesagem passava a custar o prazo inteiro. A guarda de
-                // ambiguidade continua valendo sobre ele, entao o frame colado
-                // segue recusado — que e o defeito que importa.
-                let candidates: Vec<&str> = if frames.is_empty() {
-                    vec![decoded.as_str()]
-                } else {
-                    frames.iter().rev().map(|frame| frame.as_str()).collect()
-                };
-                for frame in candidates {
-                    if frame_is_ambiguous(frame, &config.parser_regex) {
-                        continue;
+                if frames.is_empty() {
+                    // SEM terminador nao ha como separar dois frames colados, e
+                    // a guarda de ambiguidade e a unica defesa: e aqui, e so
+                    // aqui, que ela vale.
+                    if !frame_is_ambiguous(&decoded, &config.parser_regex) {
+                        match parse_weight_frame(&decoded, &config.parser_regex) {
+                            Ok(weight) => return Ok((weight, decoded.clone())),
+                            Err(err) => {
+                                if err.contains("instavel")
+                                    || err.contains("sobrecarga")
+                                    || err.contains("negativo")
+                                {
+                                    return Err(err);
+                                }
+                            }
+                        }
                     }
-                    match parse_weight_frame(frame, &config.parser_regex) {
-                        Ok(weight) => return Ok((weight, frame.to_string())),
-                        Err(err) => {
-                            // "instavel", "sobrecarga" e "negativo" sao status
-                            // que o indicador afirma; nao adianta esperar mais
-                            // bytes.
-                            if err.contains("instavel")
-                                || err.contains("sobrecarga")
-                                || err.contains("negativo")
-                            {
-                                return Err(err);
+                } else {
+                    // Frame que veio ENTRE terminadores ja esta delimitado pela
+                    // propria balanca: nao ha o que desambiguar. Aplicar a
+                    // guarda de largura aqui foi o que travou a ESS na v0.5.13 —
+                    // o frame do TI200 e `<STX><p 000570000000<CR>`, doze
+                    // digitos legitimos num campo so, e o byte de status nem
+                    // sempre e `+`/`-`, entao nenhum padrao ancorado o isentava.
+                    for frame in frames.iter().rev() {
+                        match parse_weight_frame(frame, &config.parser_regex) {
+                            Ok(weight) => return Ok((weight, frame.clone())),
+                            Err(err) => {
+                                if err.contains("instavel")
+                                    || err.contains("sobrecarga")
+                                    || err.contains("negativo")
+                                {
+                                    return Err(err);
+                                }
                             }
                         }
                     }
@@ -1746,6 +1754,68 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// O frame REAL da balanca do PONTO3, capturado em 26/08/2026 pela tela
+    /// "Frame bruto recebido":
+    ///
+    ///     02 BC 70 20 B0 B0 B0 B5 37 B0 B0 B0 B0 B0 B0 B0 0D D9
+    ///     STX  <  p ' '       0  0  0  5  7  0 ...          CR  Y
+    ///
+    /// Doze digitos legitimos num campo so, entre STX e CR — e o byte de
+    /// status e `<`, nao `+`. Nenhum padrao ancorado casa, entao a isencao da
+    /// v0.5.13 nao o salvava e a guarda de largura o recusava a cada amostra.
+    /// Frame que a BALANCA delimitou nao precisa ser desambiguado por nos.
+    #[test]
+    fn the_real_ess_frame_is_read_from_between_its_delimiters() {
+        let bytes: Vec<u8> = vec![
+            0x02, 0xBC, 0x70, 0x20, 0xB0, 0xB0, 0xB0, 0xB5, 0x37, 0xB0, 0xB0, 0xB0, 0xB0, 0xB0,
+            0xB0, 0xB0, 0x0D, 0xD9,
+        ];
+        let decoded = decode_frame_bytes(&bytes, "toledo:ti200:p05:3");
+        assert!(decoded.contains("<p 000570000000"), "decodificou: {decoded:?}");
+
+        let frames = complete_frames(&decoded);
+        let peso = frames
+            .iter()
+            .rev()
+            .find_map(|frame| parse_weight_frame(frame, "toledo:ti200:p05:3").ok())
+            .expect("o frame delimitado tem de ser lido");
+        assert!((peso - 5.700).abs() < 0.0005, "leu {peso} em vez de 5,700 kg");
+
+        // O frame E suspeito pela largura — doze digitos numa corrida so — e e
+        // exatamente por isso que a guarda NAO pode rodar sobre ele: quem ja o
+        // delimitou foi a balanca, com STX e CR.
+        let campo = frames.iter().find(|f| f.contains("000570")).unwrap();
+        assert!(
+            frame_is_ambiguous(campo, "toledo:ti200:p05:3"),
+            "se este frame deixar de ser suspeito pela largura, o teste abaixo perde o sentido"
+        );
+    }
+
+    /// A guarda de ambiguidade so pode agir onde NAO ha terminador. Aplicada ao
+    /// frame que a balanca ja delimitou, ela desliga a balanca — foi o que a
+    /// v0.5.13 fez na ESS. Conferido no proprio corpo do laco, porque o caminho
+    /// depende de uma porta serial aberta e nao da para exercita-lo aqui.
+    #[test]
+    fn the_ambiguity_guard_only_runs_on_an_undelimited_buffer() {
+        let fonte = include_str!("hardware.rs");
+        let inicio = fonte
+            .find("let frames = complete_frames(&decoded);")
+            .expect("laco de amostragem");
+        let corpo = &fonte[inicio..];
+        let fim = corpo.find("Err(err) if err.kind()").expect("fim do ramo Ok");
+        let corpo = &corpo[..fim];
+
+        let ramo_delimitado = corpo.find("} else {").expect("ramo dos frames delimitados");
+        assert!(
+            !corpo[ramo_delimitado..].contains("frame_is_ambiguous"),
+            "frame ja delimitado pela balanca nao passa pela guarda de largura"
+        );
+        assert!(
+            corpo[..ramo_delimitado].contains("frame_is_ambiguous"),
+            "o buffer SEM terminador continua precisando da guarda"
+        );
     }
 
     #[test]

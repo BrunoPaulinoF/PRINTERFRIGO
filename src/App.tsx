@@ -776,7 +776,17 @@ export function App() {
         const reading = await readScaleStable(scale);
         const weight = reading.weightKg;
         setLastWeight(weight);
-        if (!reading.stable) {
+        // O CLIQUE do operador ja e a confirmacao de estabilidade: ele esta
+        // olhando o visor da balanca quando aperta. Exigir que o app tambem
+        // confirme so faz sentido onde o app decide a hora sozinho (AUTO) ou
+        // onde a peca balanca por natureza — a carcaca no trilho do
+        // RECEBIMENTO, que assenta escorrendo e ja pariu peso errado em nota.
+        //
+        // Na saida da OP e na contagem de estoque a caixa esta parada na
+        // bancada, e recusar o clique so devolve ao operador um erro que ele
+        // nao tem como resolver a nao ser clicando de novo.
+        const clickIsProofEnough = session.flow !== "RECEIVING";
+        if (!reading.stable && !clickIsProofEnough) {
           // Peso que a balanca nao confirmou NAO vira volume. Numa carcaca isso
           // seria um peso errado em nota fiscal; repetir o clique custa
           // segundos, corrigir o volume depois custa muito mais. Marca como
