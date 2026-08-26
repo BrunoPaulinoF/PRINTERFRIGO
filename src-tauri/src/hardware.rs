@@ -411,10 +411,26 @@ pub fn evaluate_stability(
     if window.len() < min_samples {
         return None;
     }
-    // A janela so vale se cobrir o periodo pedido; senao um burst rapido de
-    // leituras logo apos o inicio passaria como estavel.
-    let oldest = samples.iter().find(|sample| sample.at_ms >= window_start)?;
-    if now_ms.saturating_sub(oldest.at_ms) + 1 < stable_ms {
+    // A leitura precisa estar ACONTECENDO ha pelo menos `stable_ms`; senao um
+    // burst rapido de leituras logo apos o inicio passaria como estavel.
+    //
+    // Compara com a amostra mais antiga RETIDA, nao com a mais antiga da
+    // JANELA. A da janela tem, por definicao, no maximo `stable_ms` de idade —
+    // cobrar que ela tenha exatamente isso so e satisfazivel quando uma amostra
+    // cai no milissegundo da fronteira, ou seja, quando `stable_ms` e multiplo
+    // exato do intervalo entre amostras.
+    //
+    // Foi assim que a pesagem da ESS parou em 26/08/2026. O PONTO3 amostra a
+    // ~180 ms (28 amostras em 5.032 ms) com `stable_ms` de 1200: a mais antiga
+    // da janela tem 1080 ms e a condicao pedia 1199. Nem o peso PARADO passava,
+    // e nenhuma tolerancia resolvia — a tolerancia nem entra nesta conta. A
+    // estacao ficava "lendo balanca" ate o tempo limite, em toda pesagem.
+    //
+    // So aparece quando o criterio da janela e exigido junto com o aviso do
+    // indicador, o que passou a valer na v0.5.9: ate a v0.5.8 o modo indicador
+    // nao chamava esta funcao, e por isso a ESS rodou meses sem ver o defeito.
+    let first = samples.first()?;
+    if now_ms.saturating_sub(first.at_ms) + 1 < stable_ms {
         return None;
     }
     if !is_stable(&window, threshold_kg) {
@@ -1872,6 +1888,38 @@ mod tests {
             (800, 42.6),
         ]);
         assert!(evaluate_stability(&samples, 800, 800, 4, 0.1).is_none());
+    }
+
+    /// A pesagem da ESS parou em 26/08/2026 por causa desta porta.
+    ///
+    /// Config real do PONTO3: `stable_ms` 1200, confirmacoes 2, tolerancia
+    /// 0,05 — e amostras a cada ~180 ms (28 em 5.032 ms, medido no log). A
+    /// condicao antiga comparava com a amostra mais antiga da JANELA, que tem
+    /// no maximo `stable_ms` de idade: 1200/180 nao e inteiro, a mais antiga
+    /// tinha 1080 ms e a regra pedia 1199. Nem peso PARADO passava.
+    #[test]
+    fn a_settled_weight_passes_even_when_the_period_is_not_a_multiple_of_the_sample_gap() {
+        for gap_ms in [150_u64, 180, 200, 240, 300, 400] {
+            let samples: Vec<WeightSample> = (1..=12)
+                .map(|i| WeightSample { at_ms: i * gap_ms, weight_kg: 20.40 })
+                .collect();
+            let now = samples.last().unwrap().at_ms;
+            assert!(
+                evaluate_stability(&samples, now, 1200, 2, 0.05).is_some(),
+                "peso parado tem de estabilizar com amostras a cada {gap_ms} ms"
+            );
+        }
+    }
+
+    /// O que a porta existe para barrar continua barrado: leitura que acabou
+    /// de comecar nao vale como estavel.
+    #[test]
+    fn a_reading_that_just_started_is_still_refused() {
+        let samples = sampled(&[(180, 20.40), (360, 20.40)]);
+        assert!(
+            evaluate_stability(&samples, 360, 1200, 2, 0.05).is_none(),
+            "360 ms de leitura nao cobrem os 1200 ms pedidos"
+        );
     }
 
     #[test]
