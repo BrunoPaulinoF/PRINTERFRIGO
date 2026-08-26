@@ -641,7 +641,13 @@ export function App() {
     }
   }
 
-  async function submitCapture(session: HardwareSession, weight: number, commandId: string, stable = true) {
+  async function submitCapture(
+    session: HardwareSession,
+    weight: number,
+    commandId: string,
+    stable = true,
+    frame = "",
+  ) {
     if (!config.token) return;
     const captureId = `${session.id}-${commandId}`;
     const request: PendingCaptureSubmit = {
@@ -651,7 +657,14 @@ export function App() {
       flow: session.flow,
       grossWeight: weight,
       stable,
-      payload: { context: session.context },
+      // `scale` viaja junto do contexto porque a captura e o unico registro
+      // que sobrevive a estacao: sem o frame cru e o parser em uso, descobrir
+      // por que um peso saiu errado exige deduzir a causa a partir do proprio
+      // numero — que foi o que custou o diagnostico de 26/08/2026.
+      payload: {
+        context: session.context,
+        scale: { frame, parserRegex: config.scale.parserRegex, port: config.scale.port },
+      },
     };
     await savePendingCaptureSubmit(captureId, request);
     await submitCaptureApi(config, request)
@@ -786,7 +799,7 @@ export function App() {
           const floor = emptyWeightOf(scale) + scale.minWeightKg;
           throw new Error(`Peso ${weight.toFixed(3)} kg abaixo do minimo ${floor.toFixed(3)} kg.`);
         }
-        await submitCapture(session, weight, commandId, reading.stable);
+        await submitCapture(session, weight, commandId, reading.stable, reading.frame);
         handledCommands.current.add(commandId);
       } catch (error) {
         setStatus(error instanceof Error ? error.message : "Falha ao capturar peso.");
@@ -848,7 +861,7 @@ export function App() {
         state.lastCapturedWeight = weight;
         state.armed = false;
         try {
-          await submitCapture(session, weight, makeAutoCaptureKey());
+          await submitCapture(session, weight, makeAutoCaptureKey(), true, reading.frame);
         } catch (error) {
           recordLocalLog("warn", "Captura automatica nao enviada; sera reenviada via fila local.", {
             sessionId: session.id,
