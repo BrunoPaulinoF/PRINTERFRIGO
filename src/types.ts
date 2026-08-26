@@ -28,6 +28,9 @@ export type StableReading = {
   samples: number;
   elapsedMs: number;
   reason: string;
+  /// O frame cru que a balanca enviou. Vai junto da captura para que "de onde
+  /// saiu esse peso" seja uma consulta, e nao uma deducao a partir do numero.
+  frame: string;
 };
 
 export type PrinterConfig = {

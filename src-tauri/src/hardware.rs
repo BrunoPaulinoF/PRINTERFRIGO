@@ -170,6 +170,84 @@ fn strip_control_chars(frame: &str) -> String {
         .collect()
 }
 
+/// Separa do buffer acumulado apenas os frames que chegaram INTEIROS.
+///
+/// Um indicador serial nao entrega um frame por leitura: ele transmite um
+/// fluxo, e uma leitura da porta cai onde cair. Sem esta separacao o parser
+/// enxerga o buffer todo de uma vez, e foi exatamente assim que a ESS
+/// etiquetou 20,7 kg como 207 kg em 24-26/08/2026: o campo `020700` chegou
+/// colado ao inicio do frame seguinte (`0207000207...`) e o `\d{5,7}` guloso
+/// do P05 engoliu SETE digitos em vez de seis. Dividido por 1000, isso e
+/// exatamente dez vezes o peso da caixa — um numero plausivel, que ninguem
+/// le como defeito.
+///
+/// O mesmo buffer sem separacao erra para o outro lado: uma leitura que pegou
+/// so `02280` casa com o minimo de cinco digitos e devolve 2,280 kg.
+///
+/// Terminador e qualquer caractere de controle (CR, LF, ETX, STX) — os
+/// mesmos que `strip_control_chars` descarta depois. So entra na lista o
+/// trecho que veio SEGUIDO de um terminador: o ultimo pedaco de um buffer que
+/// ainda esta chegando fica de fora, e o chamador espera mais bytes.
+pub fn complete_frames(decoded: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for ch in decoded.chars() {
+        if ch.is_control() && ch != '\t' {
+            if !current.trim().is_empty() {
+                out.push(current.clone());
+            }
+            current.clear();
+        } else {
+            current.push(ch);
+        }
+    }
+    out
+}
+
+/// Um frame que oferece mais de um peso possivel nao e um frame: e dois.
+///
+/// Vale como rede para o caso em que a balanca nao termina os frames (ou o
+/// terminador se perde). Adivinhar qual dos campos e o peso e o mesmo erro de
+/// `\d{5,7}` guloso, so que mais adiante — e o resultado continua sendo uma
+/// etiqueta com peso plausivel e errado. Recusar devolve a decisao para o
+/// laco, que espera o proximo frame; a captura atrasa uma amostra em vez de
+/// sair errada.
+pub fn frame_is_ambiguous(frame: &str, parser_regex: &str) -> bool {
+    if !parser_regex.trim().to_ascii_lowercase().starts_with("toledo:ti200") {
+        return false;
+    }
+    let stripped = strip_control_chars(frame);
+    // Corridas de digitos longas o bastante para o P05 confundir com o peso.
+    let runs = stripped
+        .split(|ch: char| !ch.is_ascii_digit())
+        .filter(|run| run.len() >= 5)
+        .count();
+    if runs > 1 {
+        return true;
+    }
+    // Uma corrida unica, mas com mais digitos do que o campo comporta, e o
+    // caso do frame colado: `0207000207` tem dez.
+    stripped
+        .split(|ch: char| !ch.is_ascii_digit())
+        .any(|run| run.len() > 7)
+}
+
+/// O trecho do buffer que deve ser lido como peso.
+///
+/// Prefere o frame COMPLETO mais recente; sem nenhum completo, devolve o
+/// buffer inteiro, que e o comportamento de sempre. Existe para que a leitura
+/// avulsa — usada pela auto-configuracao, que e quem ESCOLHE o parser da
+/// balanca — nao caia no mesmo corte errado que etiquetou 20,7 kg como 207 kg:
+/// um parser eleito sobre um frame colado fica errado para todas as pesagens
+/// seguintes.
+fn frame_to_read(decoded: &str, parser_regex: &str) -> String {
+    complete_frames(decoded)
+        .into_iter()
+        .rev()
+        .find(|frame| !frame_is_ambiguous(frame, parser_regex))
+        .unwrap_or_else(|| decoded.to_string())
+}
+
 fn decode_frame_bytes(bytes: &[u8], parser_regex: &str) -> String {
     if parser_regex.trim().to_ascii_lowercase().starts_with("toledo:ti200") {
         return bytes.iter().map(|byte| char::from(byte & 0x7f)).collect();
@@ -721,7 +799,8 @@ pub fn read_scale_once(config: ScaleConfig) -> Result<f64, String> {
         let read = stream
             .read(buffer.as_mut_slice())
             .map_err(|err| err.to_string())?;
-        let frame = decode_frame_bytes(&buffer[..read], &config.parser_regex);
+        let decoded = decode_frame_bytes(&buffer[..read], &config.parser_regex);
+        let frame = frame_to_read(&decoded, &config.parser_regex);
         return parse_weight_frame(&frame, &config.parser_regex);
     }
 
@@ -764,7 +843,8 @@ pub fn read_scale_once(config: ScaleConfig) -> Result<f64, String> {
     let read = port
         .read(buffer.as_mut_slice())
         .map_err(|err| err.to_string())?;
-    let frame = decode_frame_bytes(&buffer[..read], &config.parser_regex);
+    let decoded = decode_frame_bytes(&buffer[..read], &config.parser_regex);
+    let frame = frame_to_read(&decoded, &config.parser_regex);
     parse_weight_frame(&frame, &config.parser_regex)
 }
 
@@ -776,6 +856,13 @@ pub struct StableReading {
     pub samples: usize,
     pub elapsed_ms: u64,
     pub reason: String,
+    /// O frame CRU que produziu este peso, como a balanca o enviou.
+    ///
+    /// Existe porque em 24-26/08/2026 a ESS etiquetou caixas de 20 kg com 207
+    /// kg e nao havia, em lugar nenhum do sistema, registro do que a balanca
+    /// tinha mandado: a causa teve de ser deduzida do numero. Com o frame
+    /// gravado junto da captura, a mesma pergunta se responde numa consulta.
+    pub frame: String,
 }
 
 /// Canal aberto com a balanca. Existe para que a leitura de estabilizacao
@@ -895,7 +982,11 @@ fn response_wait_for(config: &ScaleConfig) -> Duration {
 
 /// Pede e le UMA amostra no canal ja aberto. Nao usa sleep fixo: retorna assim
 /// que um frame com peso chega, ou quando `wait` estoura.
-fn sample_scale(link: &mut ScaleLink, config: &ScaleConfig, wait: Duration) -> Result<f64, String> {
+fn sample_scale(
+    link: &mut ScaleLink,
+    config: &ScaleConfig,
+    wait: Duration,
+) -> Result<(f64, String), String> {
     link.discard_input();
     if let Some(command) = config
         .read_command
@@ -915,14 +1006,30 @@ fn sample_scale(link: &mut ScaleLink, config: &ScaleConfig, wait: Duration) -> R
             Ok(0) => std::thread::sleep(Duration::from_millis(5)),
             Ok(read) => {
                 accumulated.extend_from_slice(&buffer[..read]);
-                let frame = decode_frame_bytes(&accumulated, &config.parser_regex);
-                match parse_weight_frame(&frame, &config.parser_regex) {
-                    Ok(weight) => return Ok(weight),
-                    Err(err) => {
-                        // "instavel", "sobrecarga" e "negativo" sao status que o
-                        // indicador afirma; nao adianta esperar mais bytes.
-                        if err.contains("instavel") || err.contains("sobrecarga") || err.contains("negativo") {
-                            return Err(err);
+                let decoded = decode_frame_bytes(&accumulated, &config.parser_regex);
+                // Le apenas frames que chegaram INTEIROS, e o mais recente
+                // deles. Parsear o buffer acumulado era o defeito: um campo
+                // colado ao inicio do frame seguinte virava peso dez vezes
+                // maior, e meio campo virava peso dez vezes menor. Enquanto
+                // nenhum frame fechou, o laco espera mais bytes — que e o que
+                // ele ja fazia quando o parse falhava.
+                let frames = complete_frames(&decoded);
+                for frame in frames.iter().rev() {
+                    if frame_is_ambiguous(frame, &config.parser_regex) {
+                        continue;
+                    }
+                    match parse_weight_frame(frame, &config.parser_regex) {
+                        Ok(weight) => return Ok((weight, frame.clone())),
+                        Err(err) => {
+                            // "instavel", "sobrecarga" e "negativo" sao status
+                            // que o indicador afirma; nao adianta esperar mais
+                            // bytes.
+                            if err.contains("instavel")
+                                || err.contains("sobrecarga")
+                                || err.contains("negativo")
+                            {
+                                return Err(err);
+                            }
                         }
                     }
                 }
@@ -931,6 +1038,21 @@ fn sample_scale(link: &mut ScaleLink, config: &ScaleConfig, wait: Duration) -> R
             Err(err) => return Err(err.to_string()),
         }
         if Instant::now() >= deadline {
+            // Nem todo indicador termina o frame. Se o prazo acabou, chegou
+            // byte e NENHUM frame fechou, o buffer inteiro e o frame — mas so
+            // quando ele oferece um peso unico. Sem esta saida, uma balanca de
+            // largura fixa e sem terminador deixaria de ser lida; com ela, o
+            // frame colado continua recusado, que e o defeito que importa.
+            if !accumulated.is_empty() {
+                let decoded = decode_frame_bytes(&accumulated, &config.parser_regex);
+                if complete_frames(&decoded).is_empty()
+                    && !frame_is_ambiguous(&decoded, &config.parser_regex)
+                {
+                    if let Ok(weight) = parse_weight_frame(&decoded, &config.parser_regex) {
+                        return Ok((weight, decoded.clone()));
+                    }
+                }
+            }
             return Err("Balanca nao respondeu dentro do intervalo de amostragem.".to_string());
         }
     }
@@ -962,6 +1084,7 @@ pub fn read_scale_stable(config: ScaleConfig) -> Result<StableReading, String> {
             samples: config.stable_window.max(2),
             elapsed_ms: 0,
             reason: "simulado".to_string(),
+            frame: format!("simulado:{weight:.3}"),
         });
     }
 
@@ -971,13 +1094,15 @@ pub fn read_scale_stable(config: ScaleConfig) -> Result<StableReading, String> {
     let started = Instant::now();
     let mut samples: Vec<WeightSample> = Vec::new();
     let mut last_weight: Option<f64> = None;
+    let mut last_frame = String::new();
     let mut last_error: Option<String> = None;
 
     loop {
         let elapsed_ms = started.elapsed().as_millis() as u64;
         match sample_scale(&mut link, &config, response_wait) {
-            Ok(weight) => {
+            Ok((weight, frame)) => {
                 last_weight = Some(weight);
+                last_frame = frame;
                 samples.push(WeightSample {
                     at_ms: elapsed_ms,
                     weight_kg: weight,
@@ -1029,6 +1154,7 @@ pub fn read_scale_stable(config: ScaleConfig) -> Result<StableReading, String> {
                         } else {
                             format!("peso dentro da tolerancia por {stable_ms} ms")
                         },
+                        frame: last_frame.clone(),
                     });
                 }
             }
@@ -1062,6 +1188,7 @@ pub fn read_scale_stable(config: ScaleConfig) -> Result<StableReading, String> {
                         last_error.unwrap_or_else(|| "Peso nao estabilizou no tempo limite.".to_string()),
                         if trusts_indicator { "aviso da balanca" } else { "janela de tempo" },
                     ),
+                    frame: last_frame.clone(),
                 }),
                 None => Err(last_error
                     .unwrap_or_else(|| "Balanca nao respondeu durante a leitura.".to_string())),
@@ -1468,6 +1595,84 @@ async fn parse_json_response(response: reqwest::Response) -> Result<serde_json::
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A rajada que etiquetou 20,7 kg como 207 kg na ESS entre 24 e 26/08/2026.
+    ///
+    /// Os tres valores sao os que foram gravados em producao: 590,000 kg num pe
+    /// de 59,0 (24/08), 228,000 kg numa caixa de 22,8 (26/08 16:05) e o 207,000
+    /// que deu nome ao chamado. Todos saem do MESMO campo de seis digitos
+    /// colado ao inicio do frame seguinte.
+    #[test]
+    fn a_glued_frame_is_never_read_as_ten_times_the_weight() {
+        let parser = "toledo:ti200:p05:3";
+        for (colado, kg) in [
+            ("020700\r020700\r", 20.7),
+            ("022800\r022800\r", 22.8),
+            ("059000\r059000\r", 59.0),
+        ] {
+            let frames = complete_frames(colado);
+            assert_eq!(frames.len(), 2, "cada frame terminado conta uma vez");
+            let weight = parse_weight_frame(frames.last().unwrap(), parser).unwrap();
+            assert!(
+                (weight - kg).abs() < 0.0005,
+                "{colado:?} deu {weight} em vez de {kg}"
+            );
+        }
+    }
+
+    /// O outro lado do mesmo defeito: meia leitura casava com o minimo de cinco
+    /// digitos do P05 e virava um peso dez vezes MENOR, tambem plausivel.
+    #[test]
+    fn a_half_frame_is_not_a_weight_yet() {
+        assert!(
+            complete_frames("02280").is_empty(),
+            "sem terminador o frame ainda esta chegando"
+        );
+        // E o que ele daria se fosse aceito, para o numero ficar registrado.
+        assert!((parse_weight_frame("02280", "toledo:ti200:p05:3").unwrap() - 2.280).abs() < 0.0005);
+    }
+
+    /// A leitura avulsa alimenta a AUTO-CONFIGURACAO, que e quem elege o parser
+    /// da balanca: um parser escolhido sobre um frame colado fica errado para
+    /// todas as pesagens seguintes. Sem terminador ela cai no buffer inteiro,
+    /// que e o comportamento de sempre — a regra nao pode tirar leitura de
+    /// balanca que nunca termina o frame.
+    #[test]
+    fn a_single_read_prefers_the_newest_complete_frame() {
+        let parser = "toledo:ti200:p05:3";
+        assert_eq!(frame_to_read("020700\r020700\r", parser), "020700");
+        assert_eq!(frame_to_read("020700\r0207", parser), "020700", "cauda incompleta e ignorada");
+        assert_eq!(frame_to_read("020700", parser), "020700", "sem terminador, o buffer inteiro");
+        assert_eq!(
+            frame_to_read("0207000207", parser),
+            "0207000207",
+            "sem terminador nao ha como separar: fica como era, e a guarda do servidor pega"
+        );
+    }
+
+    #[test]
+    fn only_terminated_frames_are_offered_to_the_parser() {
+        // O ultimo pedaco nao terminou: fica de fora ate o resto chegar.
+        assert_eq!(complete_frames("022800\r0228"), vec!["022800".to_string()]);
+        assert_eq!(
+            complete_frames("022800\r\n021500\r\n"),
+            vec!["022800".to_string(), "021500".to_string()]
+        );
+        assert!(complete_frames("").is_empty());
+    }
+
+    /// Sem terminador nao ha como separar dois campos, entao a recusa e a unica
+    /// resposta honesta — adivinhar qual deles e o peso foi o defeito.
+    #[test]
+    fn an_ambiguous_frame_is_refused_instead_of_guessed() {
+        let parser = "toledo:ti200:p05:3";
+        assert!(frame_is_ambiguous("0207000207", parser), "digitos demais");
+        assert!(frame_is_ambiguous("020700 020700", parser), "dois campos");
+        assert!(!frame_is_ambiguous("020700", parser), "um campo, um peso");
+        assert!(!frame_is_ambiguous("+0020.700kg", parser));
+        // Fora do TI200 quem manda e o regex do usuario; nao ha campo a supor.
+        assert!(!frame_is_ambiguous("0207000207", r"([-+]?\d+[\.,]?\d*)\s*kg?"));
+    }
 
     #[test]
     fn parses_toledo_like_frame() {
