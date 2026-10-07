@@ -351,7 +351,13 @@ export function App() {
   async function refreshDevices() {
     const [serial, queues] = await Promise.all([
       listSerialPorts().catch(() => []),
-      listPrinters().catch(() => []),
+      listPrinters().catch((error) => {
+        // Lista vazia sem motivo fazia o operador procurar defeito na
+        // impressora; o motivo real (WMI quebrado, PowerShell bloqueado) vai
+        // para a tela.
+        setStatus(errorMessage(error, "Nao foi possivel listar as impressoras do Windows."));
+        return [];
+      }),
     ]);
     setPorts(serial);
     setPrinters(queues);

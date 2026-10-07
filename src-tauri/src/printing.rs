@@ -14,6 +14,31 @@ use std::os::windows::process::CommandExt;
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
+/// Lista as filas de impressao do Windows, uma por linha: `nome<TAB>True|False`.
+///
+/// O caminho principal e o WMI (`Win32_Printer`). Em alguns computadores o
+/// repositorio WMI perde essa classe e responde "Classe invalida"
+/// (0x80041010) mesmo com o spooler e as impressoras funcionando — e antes a
+/// lista simplesmente vinha vazia, sem erro nenhum. Nesse caso cai no
+/// `Get-Printer` (modulo PrintManagement, namespace `root/StandardCimv2`), que
+/// nao depende daquela classe; a impressora padrao sai do registro do usuario,
+/// porque `Get-Printer` nao informa qual e a padrao.
+///
+/// A saida vai em UTF-8 para nome de impressora com acento nao chegar quebrado.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+const LIST_PRINTERS_SCRIPT: &str = r#"$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+try {
+  Get-CimInstance Win32_Printer | Sort-Object Name | ForEach-Object { "$($_.Name)`t$($_.Default)" }
+} catch {
+  $default = ''
+  try {
+    $device = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Windows' -Name Device).Device
+    if ($device) { $default = ($device -split ',')[0] }
+  } catch {}
+  Get-Printer | Sort-Object Name | ForEach-Object { "$($_.Name)`t$($_.Name -eq $default)" }
+}"#;
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrinterInfo {
@@ -28,14 +53,13 @@ pub fn list_printers() -> Result<Vec<PrinterInfo>, String> {
         let mut command = Command::new("powershell");
         command
             .creation_flags(CREATE_NO_WINDOW)
-            .args([
-                "-NoProfile",
-                "-Command",
-                "Get-CimInstance Win32_Printer | Sort-Object Name | ForEach-Object { \"$($_.Name)`t$($_.Default)\" }",
-            ]);
+            .args(["-NoProfile", "-Command", LIST_PRINTERS_SCRIPT]);
         let output = command.output().map_err(|err| err.to_string())?;
         if !output.status.success() {
-            return Ok(Vec::new());
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(format!(
+                "O Windows nao conseguiu listar as impressoras. {stderr}"
+            ));
         }
         let stdout = String::from_utf8_lossy(&output.stdout);
         return Ok(parse_printer_rows(&stdout));
@@ -216,6 +240,23 @@ fn send_raw_to_windows_printer(queue: &str, data: &[u8]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn list_script_falls_back_to_get_printer_when_wmi_class_is_broken() {
+        let wmi = LIST_PRINTERS_SCRIPT.find("Win32_Printer").expect("caminho WMI");
+        let fallback = LIST_PRINTERS_SCRIPT.find("Get-Printer").expect("queda para Get-Printer");
+        assert!(wmi < fallback);
+        assert!(LIST_PRINTERS_SCRIPT.contains("$ErrorActionPreference = 'Stop'"));
+    }
+
+    #[test]
+    fn parses_get_printer_rows_with_default_flag() {
+        let rows = parse_printer_rows("ELGIN L42PRO FULL\tTrue\r\nPDFCreator\tFalse\r\n");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].name, "ELGIN L42PRO FULL");
+        assert!(rows[0].is_default);
+        assert!(!rows[1].is_default);
+    }
 
     #[test]
     fn dry_run_writes_zpl_file() {
