@@ -1,5 +1,26 @@
 # AGENTS.md — PrinterFrigo
 
+## Um Agente Por Estação (Instância Única)
+
+Adicionado em 20/10/2026 (`tauri-plugin-single-instance`, registrado como o
+PRIMEIRO plugin em `src-tauri/src/lib.rs`; guardado por
+`scripts/single-instance.test.mjs`).
+
+Na PONTO3 da ESS o agente estava aberto **duas vezes** (o atalho clicado com o
+app já rodando pela inicialização do Windows). As duas cópias dividem a mesma
+fila local (SQLite): `submitCapture` grava a captura na fila ANTES de enviar, e o
+`flushPendingCaptures` da OUTRA cópia a reenviava enquanto a primeira ainda
+esperava a resposta — mesmo `captureId`, 0,1 a 0,5 s depois. As duas também
+pegavam a mesma etiqueta no heartbeat. Resultado: 30 de 116 pesagens viraram
+duas caixas e duas etiquetas. Dentro de UMA cópia isso não acontece: o tick é
+serializado por `serviceTicking`.
+
+- Abrir de novo agora só traz a janela da cópia que já está rodando.
+- O KyberFrigo também passou a travar a captura no servidor (mesmo `captureId`
+  vira uma caixa só) e a etiqueta no heartbeat — as duas travas valem para
+  estação que ainda não atualizou.
+- **Não tire o plugin nem o mova de posição**: ele precisa vir antes dos outros.
+
 ## O Frame Da Balança Tem De Ser Delimitado
 
 A caixa de 20,7 kg saiu etiquetada com **207 kg** na ESS entre 24 e 26/08/2026.
