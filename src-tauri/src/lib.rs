@@ -54,6 +54,20 @@ async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
 
 pub fn run() {
     tauri::Builder::default()
+        // Uma estacao, um agente. Duas copias abertas (o atalho clicado com o
+        // app ja rodando pela inicializacao do Windows) dividem a mesma fila
+        // local: a copia B reenviava a captura que a copia A ainda estava
+        // enviando, e as duas pegavam a mesma etiqueta para imprimir. Saiu
+        // caixa e etiqueta em dobro na ESS (PONTO3, 20/10/2026: 30 de 116
+        // pesagens). A segunda copia agora so traz a janela da primeira para a
+        // frente e encerra. Precisa ser o PRIMEIRO plugin registrado.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
