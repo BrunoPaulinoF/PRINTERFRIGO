@@ -490,7 +490,7 @@ export function App() {
       setStatus("Parser de peso validado.");
     } catch (error) {
       setLastWeight(null);
-      setStatus(error instanceof Error ? error.message : "Nao foi possivel ler o peso.");
+      setStatus(errorMessage(error, "Nao foi possivel ler o peso."));
     }
   }
 
@@ -524,7 +524,7 @@ export function App() {
         setStatus(errorMessage(stableError, "A balanca respondeu ao teste, mas falhou na leitura com estabilizacao."));
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Erro ao ler balanca.";
+      const message = errorMessage(error, "Erro ao ler balanca.");
       setRawFrame(message);
       setStatus(message);
     } finally {
@@ -542,7 +542,7 @@ export function App() {
       const result = await testPrintZpl(printer, sampleZpl);
       setStatus(result);
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Falha no teste de impressao.");
+      setStatus(errorMessage(error, "Falha no teste de impressao."));
     } finally {
       setIsBusy(false);
     }
@@ -754,9 +754,9 @@ export function App() {
         printedJobs.current.delete(job.id);
       } catch (error) {
         if (printedJobs.current.has(job.id)) {
-          setStatus(error instanceof Error ? `Etiqueta impressa, mas falhou ao confirmar: ${error.message}` : "Etiqueta impressa, mas falhou ao confirmar.");
+          setStatus(`Etiqueta impressa, mas falhou ao confirmar: ${errorMessage(error, "erro desconhecido")}`);
         } else {
-          const printError = error instanceof Error ? error.message : "Falha ao imprimir.";
+          const printError = errorMessage(error, "Falha ao imprimir.");
           await savePendingPrintJobReport(job.id, "FAILED", printError);
           await reportPrintJob(job.id, "FAILED", printError);
         }
@@ -818,7 +818,7 @@ export function App() {
         await submitCapture(session, weight, commandId, reading.stable, reading.frame);
         handledCommands.current.add(commandId);
       } catch (error) {
-        setStatus(error instanceof Error ? error.message : "Falha ao capturar peso.");
+        setStatus(errorMessage(error, "Falha ao capturar peso."));
       } finally {
         processingCommands.current.delete(commandId);
       }
@@ -1076,7 +1076,7 @@ export function App() {
     try {
       await serviceTick(true);
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Falha no heartbeat.");
+      setStatus(errorMessage(error, "Falha no heartbeat."));
     } finally {
       setIsBusy(false);
     }
@@ -1101,7 +1101,7 @@ export function App() {
         setStatus(result.message);
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Falha na auto-configuracao.";
+      const message = errorMessage(error, "Falha na auto-configuracao.");
       setAutoConfig({
         ok: false,
         message,
@@ -1151,7 +1151,7 @@ export function App() {
       setStationPassword("");
       setStationError("");
     } catch (error) {
-      setStationError(error instanceof Error ? error.message : "Falha ao validar senha.");
+      setStationError(errorMessage(error, "Falha ao validar senha."));
     }
   }
 
@@ -1215,7 +1215,7 @@ export function App() {
       setResetMessage(message);
       if (stationUnlocked) setStatus(message);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Falha ao resetar impressora.";
+      const message = errorMessage(error, "Falha ao resetar impressora.");
       setResetMessage(message);
       if (stationUnlocked) setStatus(message);
     } finally {
